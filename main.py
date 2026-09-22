@@ -1,3 +1,6 @@
+from openai import APIError
+from llm import generate_next_action
+from uuid import uuid4
 import json
 from pathlib import Path
 from datetime import date, datetime
@@ -49,7 +52,55 @@ def is_valid_task(task):
 
         if parsed_deadline.isoformat() != deadline:
             return False
+    if "blocked" in task and type(task["blocked"]) is not bool:
+        return False
 
+    next_action = task.get("next_action")
+
+    if next_action is not None:
+        if not isinstance(next_action, str) or not next_action.strip():
+            return False
+
+    checkpoints = task.get("checkpoints", [])
+
+    if not isinstance(checkpoints, list):
+        return False
+
+    for expected_version, checkpoint in enumerate(checkpoints, start=1):
+        if not isinstance(checkpoint, dict):
+            return False
+
+        version = checkpoint.get("version")
+        if type(version) is not int or version != expected_version:
+            return False
+
+        action = checkpoint.get("action")
+        if not isinstance(action, str) or not action.strip():
+            return False
+
+        feedback = checkpoint.get("feedback")
+        if feedback not in ["done", "blocked", "continue"]:
+            return False
+
+        blocker = checkpoint.get("blocker")
+        if feedback == "blocked":
+            if not isinstance(blocker, str) or not blocker.strip():
+                return False
+        elif blocker is not None:
+            return False
+
+        recorded_at = checkpoint.get("recorded_at")
+        if not isinstance(recorded_at, str):
+            return False
+
+        try:
+            timestamp = datetime.fromisoformat(recorded_at)
+        except ValueError:
+            return False
+
+        if timestamp.utcoffset() is None:
+            return False
+        
     return True
 
 def load_state():
@@ -71,14 +122,32 @@ def load_state():
     if not isinstance(state.get("tasks"), list):
         raise SystemExit("State içinde tasks listesi olmalı. Dosya değiştirilmedi.")
 
-    for position, task in enumerate(state["tasks"], start=1):
-        valid = is_valid_task(task)
-      # print(f"Kontrol: görev {position}, geçerli mi? {valid}")
+    seen_ids = []
 
-        if not valid:
+    for position, task in enumerate(state["tasks"], start=1):
+        if not is_valid_task(task):
             raise SystemExit(
                 f"Kayıttaki {position}. görev geçersiz. Dosya değiştirilmedi."
             )
+
+        if "id" not in task:
+            task["id"] = str(uuid4())
+
+        task_id = task["id"]
+
+        if not isinstance(task_id, str) or not task_id.strip():
+            raise SystemExit(
+                f"Kayıttaki {position}. görev kimliği geçersiz. "
+                "Dosya değiştirilmedi."
+            )
+
+        if task_id in seen_ids:
+            raise SystemExit(
+                f"Kayıttaki {position}. görev kimliği tekrarlanıyor. "
+                "Dosya değiştirilmedi."
+            )
+
+        seen_ids.append(task_id)
 
     return state
 
@@ -157,6 +226,7 @@ def read_task():
 
 
     return {
+        "id": str(uuid4()),
         "title": task_title,
         "importance": int(importance_text),
         "estimated_minutes": estimated_minutes,
@@ -209,6 +279,34 @@ def calculate_priority(task, energy, today):
 
     return {"score": score, "reasons": reasons}
 
+def is_task_blocked(task):
+    if "blocked" in task:
+        return task["blocked"]
+
+    checkpoints = task.get("checkpoints", [])
+    return bool(checkpoints) and checkpoints[-1]["feedback"] == "blocked"
+
+
+def review_blocked_tasks(tasks):
+    for task in tasks:
+        if not is_task_blocked(task):
+            continue
+
+        checkpoints = task.get("checkpoints", [])
+        blocker = checkpoints[-1].get("blocker") if checkpoints else None
+
+        print(f"Engelli görev: {task['title']}")
+        print(f"Kaydedilen engel: {blocker or 'Belirtilmedi'}")
+
+        while True:
+            answer = input("Engel kalktı mı? (e/h): ").strip().lower()
+
+            if answer in ["e", "h"]:
+                task["blocked"] = answer == "h"
+                break
+
+            print("Lütfen e veya h gir.")
+
 def select_active_tasks(tasks, available_minutes, energy, today):
     ranked_tasks = sorted(
         tasks,
@@ -220,6 +318,8 @@ def select_active_tasks(tasks, available_minutes, energy, today):
     remaining_minutes = available_minutes
 
     for task in ranked_tasks:
+        if is_task_blocked(task):
+            continue
         if len(active_tasks) == 2:
             break
 
@@ -230,6 +330,17 @@ def select_active_tasks(tasks, available_minutes, energy, today):
         remaining_minutes -= task["estimated_minutes"]
 
     return active_tasks
+
+def read_feedback():
+    while True:
+        feedback = input(
+            "Eylemin durumu (done/blocked/continue): "
+        ).strip().lower()
+
+        if feedback in ["done", "blocked", "continue"]:
+            return feedback
+
+        print("Lütfen done, blocked veya continue gir.")
 
 state = load_state()
 
@@ -269,10 +380,11 @@ for task in tasks:
     priority = calculate_priority(task, energy, today)
     print(f"{task['title']} | Öncelik puanı: {priority['score']}")
 
+review_blocked_tasks(tasks)
 active_tasks = select_active_tasks(tasks, available_minutes, energy, today)
 
 if not active_tasks:
-    print("Aktif görev seçilemedi: görev yok veya süreye sığan görev yok.")
+    print("Aktif görev seçilemedi: engeli olmayan ve süreye sığan görev yok.")
 else:
     print(f"Daily Win: {active_tasks[0]['title']}")
 
@@ -294,6 +406,15 @@ else:
 
         remaining_minutes -= task["estimated_minutes"]
 
+active_task_ids = []
+
+for task in active_tasks:
+    active_task_ids.append(task["id"])
+
+daily_win_id = None
+
+if active_task_ids:
+    daily_win_id = active_task_ids[0]
 
 state = {
     "tasks": tasks,
@@ -302,7 +423,78 @@ state = {
         "available_minutes": available_minutes,
         "energy": energy,
     },
+    "selection": {
+        "active_task_ids": active_task_ids,
+        "daily_win_id": daily_win_id,
+    },
 }
 
 save_state(state)
 print(f"Durum kaydedildi: {STATE_PATH}")
+
+if active_tasks:
+    daily_win = active_tasks[0]
+
+    try:
+        action = daily_win.get("next_action")
+
+        if action:
+            print(f"Kayıtlı eylemle devam: {action}")
+        else:
+            completed_actions = []
+
+            for checkpoint in daily_win.get("checkpoints", []):
+                if checkpoint["feedback"] == "done":
+                    completed_actions.append(checkpoint["action"])
+
+            action = generate_next_action(
+                daily_win["title"],
+                daily_win["estimated_minutes"],
+                energy,
+                completed_actions,
+            )
+
+            daily_win["next_action"] = action
+            save_state(state)
+
+            print(f"Daily Win için önerilen eylem: {action}")
+            print("Eylem kaydedildi.")
+
+    except (APIError, ValueError) as error:
+        print(f"Sonraki eylem hazırlanamadı: {error}")
+        print("Görevler ve seçim dosyada korunuyor.")
+
+    else:
+        feedback = read_feedback()
+        blocker = None
+
+        if feedback == "blocked":
+            while True:
+                blocker = input("İlerlemeyi ne engelliyor? ").strip()
+
+                if blocker:
+                    break
+
+                print("Lütfen engeli kısaca belirt.")
+
+        checkpoints = daily_win.setdefault("checkpoints", [])
+
+        checkpoint = {
+            "version": len(checkpoints) + 1,
+            "action": action,
+            "feedback": feedback,
+            "blocker": blocker,
+            "recorded_at": datetime.now().astimezone().isoformat(),
+        }
+
+        checkpoints.append(checkpoint)
+        daily_win["blocked"] = feedback == "blocked"
+
+        if feedback == "done":
+            daily_win["next_action"] = None
+
+        save_state(state)
+
+        print(
+            f"Checkpoint v{checkpoint['version']} kaydedildi: {feedback}"
+        )
