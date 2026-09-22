@@ -1,4 +1,86 @@
+import json
+from pathlib import Path
 from datetime import date, datetime
+
+STATE_PATH = Path(__file__).resolve().parent / "state.json"
+
+def save_state(state):
+    json_text = json.dumps(state, ensure_ascii=False, indent=2)
+    temporary_path = STATE_PATH.with_suffix(".tmp")
+
+    try:
+        temporary_path.write_text(json_text, encoding="utf-8")
+        temporary_path.replace(STATE_PATH)
+    except OSError as error:
+        raise SystemExit(f"Durum kaydedilemedi: {error}")
+
+def is_valid_task(task):
+    if not isinstance(task, dict):
+        return False
+
+    title = task.get("title")
+    if not isinstance(title, str) or not title.strip():
+        return False
+
+    importance = task.get("importance")
+    if type(importance) is not int or not 1 <= importance <= 5:
+        return False
+
+    minutes = task.get("estimated_minutes")
+    if type(minutes) is not int or minutes <= 0:
+        return False
+
+    if task.get("cognitive_load") not in ["low", "medium", "high"]:
+        return False
+
+    if "deadline" not in task:
+        return False
+
+    deadline = task["deadline"]
+
+    if deadline is not None:
+        if not isinstance(deadline, str):
+            return False
+
+        try:
+            parsed_deadline = date.fromisoformat(deadline)
+        except ValueError:
+            return False
+
+        if parsed_deadline.isoformat() != deadline:
+            return False
+
+    return True
+
+def load_state():
+    try:
+        json_text = STATE_PATH.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return {"tasks": [], "day": None}
+    except OSError as error:
+        raise SystemExit(f"Kayıt dosyası okunamadı: {error}")
+
+    try:
+        state = json.loads(json_text)
+    except json.JSONDecodeError:
+        raise SystemExit("state.json geçerli JSON değil. Dosya değiştirilmedi.")
+
+    if not isinstance(state, dict):
+        raise SystemExit("State bir dictionary olmalı. Dosya değiştirilmedi.")
+
+    if not isinstance(state.get("tasks"), list):
+        raise SystemExit("State içinde tasks listesi olmalı. Dosya değiştirilmedi.")
+
+    for position, task in enumerate(state["tasks"], start=1):
+        valid = is_valid_task(task)
+      # print(f"Kontrol: görev {position}, geçerli mi? {valid}")
+
+        if not valid:
+            raise SystemExit(
+                f"Kayıttaki {position}. görev geçersiz. Dosya değiştirilmedi."
+            )
+
+    return state
 
 def read_positive_integer(prompt):
     while True:
@@ -149,13 +231,16 @@ def select_active_tasks(tasks, available_minutes, energy, today):
 
     return active_tasks
 
+state = load_state()
+
 available_minutes = read_positive_integer(
     "Bugün kullanılabilir süre (dakika): "
 )
 
 energy = read_energy()
 
-tasks = []
+tasks = state["tasks"]
+print(f"Kayıttan yüklenen görev: {len(tasks)}")
 
 while True:
     command = input("Görev eklemek için Enter, bitirmek için q: ").strip().lower()
@@ -208,3 +293,16 @@ else:
         )
 
         remaining_minutes -= task["estimated_minutes"]
+
+
+state = {
+    "tasks": tasks,
+    "day": {
+        "date": today.isoformat(),
+        "available_minutes": available_minutes,
+        "energy": energy,
+    },
+}
+
+save_state(state)
+print(f"Durum kaydedildi: {STATE_PATH}")
