@@ -106,7 +106,17 @@ def is_valid_task(task):
                     return False
             elif output_note is not None:
                 return False
+        if "planned_minutes" in checkpoint:
+            planned = checkpoint["planned_minutes"]
 
+            if type(planned) is not int or planned <= 0:
+                return False
+
+        if "spent_minutes" in checkpoint:
+            spent = checkpoint["spent_minutes"]
+
+            if type(spent) is not int or spent < 0:
+                return False
         blocker = checkpoint.get("blocker")
 
         blocker = checkpoint.get("blocker")
@@ -445,13 +455,73 @@ def review_next_action(suggested_action):
 
         print("Geçerli bir seçenek gir; öneri yoksa y veya q kullan.")
 
+def read_nonnegative_integer(prompt):
+    while True:
+        text = input(prompt).strip()
+
+        try:
+            value = int(text)
+        except ValueError:
+            print("Lütfen bir tam sayı gir.")
+            continue
+
+        if value < 0:
+            print("Değer negatif olamaz.")
+            continue
+
+        return value
+
+
+def read_day(state, today):
+    saved_day = state.get("day")
+
+    if (
+        isinstance(saved_day, dict)
+        and saved_day.get("date") == today.isoformat()
+        and "remaining_minutes" in saved_day
+    ):
+        remaining = saved_day["remaining_minutes"]
+
+        if type(remaining) is not int or remaining < 0:
+            raise SystemExit("Kayıtlı kalan süre geçersiz. Dosya değiştirilmedi.")
+
+        day = saved_day.copy()
+        print(f"Bugünden kalan süre: {remaining} dakika")
+
+        while True:
+            choice = input(
+                "Bu süreyle devam için Enter, düzeltmek için d: "
+            ).strip().lower()
+
+            if choice == "":
+                return day
+
+            if choice == "d":
+                day["remaining_minutes"] = read_nonnegative_integer(
+                    "Şu andan itibaren kullanılabilir süre (dakika): "
+                )
+                return day
+
+            print("Lütfen Enter'a bas veya d yaz.")
+
+    minutes = read_nonnegative_integer(
+        "Bugün kullanılabilir süre (dakika): "
+    )
+
+    return {
+        "date": today.isoformat(),
+        "available_minutes": minutes,
+        "remaining_minutes": minutes,
+    }
+
 state = load_state()
 
-available_minutes = read_positive_integer(
-    "Bugün kullanılabilir süre (dakika): "
-)
+today = date.today()
+day = read_day(state, today)
+available_minutes = day["remaining_minutes"]
 
 energy = read_energy()
+day["energy"] = energy
 
 tasks = state["tasks"]
 print(f"Kayıttan yüklenen görev: {len(tasks)}")
@@ -480,11 +550,10 @@ open_tasks = [
     task for task in tasks
     if not task.get("archived", False)
 ]
-print(f"Bugünkü süre bütçesi: {available_minutes} dakika")
+print(f"Şu an kullanılabilir süre: {available_minutes} dakika")
 print(f"Mevcut enerji: {energy}/5")
 print(f"Toplam görev: {len(tasks)}")
 
-today = date.today()
 print(f"Hesaplama tarihi: {today}")
 
 for task in open_tasks:
@@ -531,11 +600,7 @@ if active_task_ids:
 
 state = {
     "tasks": tasks,
-    "day": {
-        "date": today.isoformat(),
-        "available_minutes": available_minutes,
-        "energy": energy,
-    },
+    "day": day,
     "selection": {
         "active_task_ids": active_task_ids,
         "daily_win_id": daily_win_id,
@@ -653,6 +718,9 @@ if active_tasks:
         print(f"Çalışacağın eylem: {action}")
 
         feedback = read_feedback()
+        spent_minutes = read_nonnegative_integer(
+            "Bu çalışmada, son checkpoint'ten beri kaç dakika harcadın? "
+        )
         output_note = None
 
         if feedback == "done":
@@ -679,9 +747,15 @@ if active_tasks:
             "blocker": blocker,
             "recorded_at": datetime.now().astimezone().isoformat(),
             "output_note": output_note,
+            "planned_minutes": work_minutes,
+            "spent_minutes": spent_minutes,
         }
 
         checkpoints.append(checkpoint)
+        day["remaining_minutes"] = max(
+            0,
+            day["remaining_minutes"] - spent_minutes,
+        )
         daily_win["blocked"] = feedback == "blocked"
 
         if feedback == "done":
@@ -692,3 +766,6 @@ if active_tasks:
         print(
             f"Checkpoint v{checkpoint['version']} kaydedildi: {feedback}"
         )
+        print(
+            f"Kalan süre: {day['remaining_minutes']} dakika"
+            )
