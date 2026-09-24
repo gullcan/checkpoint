@@ -4,6 +4,7 @@ from uuid import uuid4
 import json
 from pathlib import Path
 from datetime import date, datetime
+from planning import calculate_work_minutes
 
 STATE_PATH = Path(__file__).resolve().parent / "state.json"
 
@@ -54,13 +55,25 @@ def is_valid_task(task):
             return False
     if "blocked" in task and type(task["blocked"]) is not bool:
         return False
+    if "archived" in task and type(task["archived"]) is not bool:
+        return False
 
     next_action = task.get("next_action")
 
     if next_action is not None:
         if not isinstance(next_action, str) or not next_action.strip():
             return False
+    if "desired_outcome" in task:
+        outcome = task["desired_outcome"]
 
+        if not isinstance(outcome, str) or not outcome.strip():
+            return False
+    if "context" in task:
+        context = task["context"]
+
+        if not isinstance(context, str) or not context.strip():
+            return False
+        
     checkpoints = task.get("checkpoints", [])
 
     if not isinstance(checkpoints, list):
@@ -81,6 +94,20 @@ def is_valid_task(task):
         feedback = checkpoint.get("feedback")
         if feedback not in ["done", "blocked", "continue"]:
             return False
+        feedback = checkpoint.get("feedback")
+        if feedback not in ["done", "blocked", "continue"]:
+            return False
+
+        if "output_note" in checkpoint:
+            output_note = checkpoint["output_note"]
+
+            if feedback == "done":
+                if not isinstance(output_note, str) or not output_note.strip():
+                    return False
+            elif output_note is not None:
+                return False
+
+        blocker = checkpoint.get("blocker")
 
         blocker = checkpoint.get("blocker")
         if feedback == "blocked":
@@ -315,21 +342,26 @@ def select_active_tasks(tasks, available_minutes, energy, today):
     )
 
     active_tasks = []
+    work_minutes_by_id = {}
     remaining_minutes = available_minutes
 
     for task in ranked_tasks:
-        if is_task_blocked(task):
-            continue
-        if len(active_tasks) == 2:
+        if len(active_tasks) == 2 or remaining_minutes <= 0:
             break
 
-        if task["estimated_minutes"] > remaining_minutes:
+        if is_task_blocked(task):
             continue
 
-        active_tasks.append(task)
-        remaining_minutes -= task["estimated_minutes"]
+        work_minutes = calculate_work_minutes(
+            task["estimated_minutes"],
+            remaining_minutes,
+        )
 
-    return active_tasks
+        active_tasks.append(task)
+        work_minutes_by_id[task["id"]] = work_minutes
+        remaining_minutes -= work_minutes
+
+    return active_tasks, work_minutes_by_id
 
 def read_feedback():
     while True:
@@ -341,6 +373,77 @@ def read_feedback():
             return feedback
 
         print("Lütfen done, blocked veya continue gir.")
+
+
+def read_nonempty_text(prompt):
+    while True:
+        text = input(prompt).strip()
+
+        if text:
+            return text
+
+        print("Lütfen kısa bir açıklama yaz.")
+
+
+def manage_archive(state):
+    tasks = state["tasks"]
+
+    if not tasks:
+        print("Henüz görev yok.")
+        return
+
+    while True:
+        for number, task in enumerate(tasks, start=1):
+            status = "arşivde" if task.get("archived", False) else "açık"
+            print(f"{number}. [{status}] {task['title']}")
+
+        answer = input(
+            "Arşivlemek veya geri almak için görev numarası, çıkmak için q: "
+        ).strip().lower()
+
+        if answer == "q":
+            return
+
+        try:
+            index = int(answer) - 1
+        except ValueError:
+            print("Lütfen görev numarası veya q gir.")
+            continue
+
+        if not 0 <= index < len(tasks):
+            print("Bu numarada bir görev yok.")
+            continue
+
+        task = tasks[index]
+        task["archived"] = not task.get("archived", False)
+        save_state(state)
+
+        status = "arşivlendi" if task["archived"] else "geri alındı"
+        print(f"{task['title']} — {status}.")
+
+def review_next_action(suggested_action):
+    if suggested_action:
+        print(f"Önerilen eylem: {suggested_action}")
+    else:
+        print("Kullanılabilir bir öneri yok; kendi eylemini yazabilirsin.")
+
+    while True:
+        choice = input(
+            "Kabul et: k | Kendim yazacağım: y | Bu oturumu geç: q: "
+        ).strip().lower()
+
+        if choice == "q":
+            return None
+
+        if choice == "y":
+            return read_nonempty_text(
+                "Bu sürede yapacağın tek eylem ve ortaya çıkacak sonuç: "
+            )
+
+        if choice == "k" and suggested_action:
+            return suggested_action
+
+        print("Geçerli bir seçenek gir; öneri yoksa y veya q kullan.")
 
 state = load_state()
 
@@ -354,13 +457,18 @@ tasks = state["tasks"]
 print(f"Kayıttan yüklenen görev: {len(tasks)}")
 
 while True:
-    command = input("Görev eklemek için Enter, bitirmek için q: ").strip().lower()
-
+    command = input(
+        "Görev eklemek için Enter, arşiv yönetimi için a, bitirmek için q: "
+    ).strip().lower()
     if command == "q":
         break
 
+    if command == "a":
+        manage_archive(state)
+        continue
+
     if command != "":
-        print("Lütfen Enter'a bas veya q yaz.")
+        print("Lütfen Enter'a bas, a veya q yaz.")
         continue
 
     task = read_task()
@@ -368,7 +476,10 @@ while True:
     if task is not None:
         tasks.append(task)
         print("Görev listeye eklendi.")
-
+open_tasks = [
+    task for task in tasks
+    if not task.get("archived", False)
+]
 print(f"Bugünkü süre bütçesi: {available_minutes} dakika")
 print(f"Mevcut enerji: {energy}/5")
 print(f"Toplam görev: {len(tasks)}")
@@ -376,35 +487,37 @@ print(f"Toplam görev: {len(tasks)}")
 today = date.today()
 print(f"Hesaplama tarihi: {today}")
 
-for task in tasks:
+for task in open_tasks:
     priority = calculate_priority(task, energy, today)
     print(f"{task['title']} | Öncelik puanı: {priority['score']}")
 
-review_blocked_tasks(tasks)
-active_tasks = select_active_tasks(tasks, available_minutes, energy, today)
+review_blocked_tasks(open_tasks)
+active_tasks, work_minutes_by_id = select_active_tasks(
+    open_tasks, available_minutes, energy, today
+)
 
 if not active_tasks:
-    print("Aktif görev seçilemedi: engeli olmayan ve süreye sığan görev yok.")
+    print("Aktif görev seçilemedi: uygun görev veya kullanılabilir süre yok.")
 else:
     print(f"Daily Win: {active_tasks[0]['title']}")
 
-    remaining_minutes = available_minutes
-
     for task in active_tasks:
         priority = calculate_priority(task, energy, today)
+        work_minutes = work_minutes_by_id[task["id"]]
 
-        print(f"Aktif: {task['title']} | {task['estimated_minutes']} dakika")
+        print(
+            f"Aktif: {task['title']} | "
+            f"Toplam tahmin: {task['estimated_minutes']} dakika | "
+            f"Bu oturum: {work_minutes} dakika"
+        )
 
         for reason in priority["reasons"]:
             print(f"  - {reason}")
 
         print(
-            f"  Seçim: Puan sırasıyla incelenirken "
-            f"kalan {remaining_minutes} dakikaya sığdı "
-            f"ve iki aktif görev sınırı aşılmadı."
+            f"  Seçim: Öncelik sırasına göre {work_minutes} dakika ayrıldı. "
+            "Toplam zaman bütçesi ve iki aktif görev sınırı korundu."
         )
-
-        remaining_minutes -= task["estimated_minutes"]
 
 active_task_ids = []
 
@@ -426,6 +539,7 @@ state = {
     "selection": {
         "active_task_ids": active_task_ids,
         "daily_win_id": daily_win_id,
+        "work_minutes_by_id": work_minutes_by_id,
     },
 }
 
@@ -434,9 +548,73 @@ print(f"Durum kaydedildi: {STATE_PATH}")
 
 if active_tasks:
     daily_win = active_tasks[0]
+    if not daily_win.get("desired_outcome"):
+        print(f"Görev: {daily_win['title']}")
+        daily_win["desired_outcome"] = read_nonempty_text(
+            "Bu görev bittiğinde elinde somut olarak ne olmalı? "
+        )
+        save_state(state)
+
+    print(f"Hedef sonuç: {daily_win['desired_outcome']}")
+    if not daily_win.get("context"):
+        daily_win["context"] = read_nonempty_text(
+            "Şu an hangi aşamadasın, sıradaki ihtiyaç ve sınırlar neler? "
+        )
+        save_state(state)
+    print(f"Mevcut bağlam: {daily_win['context']}")
+
+    while True:
+        choice = input(
+            "Hedefi/bağlamı düzenlemek için d, devam etmek için Enter: "
+        ).strip().lower()
+
+        if choice == "":
+            break
+
+        if choice != "d":
+            print("Lütfen d yaz veya Enter'a bas.")
+            continue
+
+        new_outcome = input(
+            "Yeni hedef sonuç (aynı kalacaksa Enter): "
+        ).strip()
+
+        new_context = input(
+            "Yeni bağlam (aynı kalacaksa Enter): "
+        ).strip()
+
+        if new_outcome:
+            daily_win["desired_outcome"] = new_outcome
+
+        if new_context:
+            daily_win["context"] = new_context
+
+        save_state(state)
+        print("Görev bilgileri kaydedildi.")
+        break
+
+    
+    work_minutes = work_minutes_by_id[daily_win["id"]]
 
     try:
         action = daily_win.get("next_action")
+
+        if action:
+            print(f"Kayıtlı eylem: {action}")
+
+            while True:
+                answer = input(
+                    f"Bu eylem hedef sonuca ve {work_minutes} dakikalık "
+                    "bütçeye uygun mu? (e/h): "
+                ).strip().lower()
+
+                if answer in ["e", "h"]:
+                    break
+
+                print("Lütfen e veya h gir.")
+
+            if answer == "h":
+                action = None
 
         if action:
             print(f"Kayıtlı eylemle devam: {action}")
@@ -449,9 +627,11 @@ if active_tasks:
 
             action = generate_next_action(
                 daily_win["title"],
-                daily_win["estimated_minutes"],
+                work_minutes,
                 energy,
                 completed_actions,
+                desired_outcome=daily_win["desired_outcome"],
+                context=daily_win["context"],
             )
 
             daily_win["next_action"] = action
@@ -463,9 +643,22 @@ if active_tasks:
     except (APIError, ValueError) as error:
         print(f"Sonraki eylem hazırlanamadı: {error}")
         print("Görevler ve seçim dosyada korunuyor.")
+        action = None
 
-    else:
+    action = review_next_action(action)
+
+    if action is not None:
+        daily_win["next_action"] = action
+        save_state(state)
+        print(f"Çalışacağın eylem: {action}")
+
         feedback = read_feedback()
+        output_note = None
+
+        if feedback == "done":
+            output_note = read_nonempty_text(
+                "Somut olarak ne ürettin veya neyi değiştirdin? "
+            )
         blocker = None
 
         if feedback == "blocked":
@@ -485,6 +678,7 @@ if active_tasks:
             "feedback": feedback,
             "blocker": blocker,
             "recorded_at": datetime.now().astimezone().isoformat(),
+            "output_note": output_note,
         }
 
         checkpoints.append(checkpoint)
