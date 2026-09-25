@@ -47,8 +47,7 @@ def telegram_request(token, method, payload):
     return data["result"]
 
 
-def build_today_message():
-    state = load_state()
+def build_today_message(state):
     day = state.get("day")
     today = date.today().isoformat()
 
@@ -84,7 +83,7 @@ def build_today_message():
 
     return "\n".join(lines)
 
-def build_plan_message(command, session):
+def build_plan_message(command, session, state):
     parts = command.split()
 
     if len(parts) != 3:
@@ -105,7 +104,6 @@ def build_plan_message(command, session):
     if minutes == 0:
         return "Kullanılabilir süre 0 dakika; çalışma planı oluşturulmadı."
 
-    state = load_state()
     today = date.today()
 
     day = state.get("day")
@@ -176,7 +174,7 @@ def build_plan_message(command, session):
 
     return "\n".join(lines)
 
-def select_work_message(command, session):
+def select_work_message(command, session, state):
     parts = command.split()
 
     if len(parts) != 2:
@@ -195,7 +193,6 @@ def select_work_message(command, session):
     if not 0 <= index < len(plan["task_ids"]):
         return "Son planda bulunan bir görev numarası seç."
 
-    state = load_state()
     task_id = plan["task_ids"][index]
 
     task = next(
@@ -285,12 +282,11 @@ def set_action_message(command, session):
     return (
         f"Çalışacağın eylem:\n{work['action'][:2500]}\n\n"
         f"Planlanan süre: {work['planned_minutes']} dakika\n"
-        "Bu eylem henüz botun belleğinde; sonucu /kaydet ile kaydedebilirsin."
+        "Eylem bekleyen çalışma olarak saklandı; sonucu /kaydet ile kaydedebilirsin."
     )
 
 
-def record_feedback_message(command, session, update_id):
-    state = load_state()
+def record_feedback_message(command, session, update_id, state):
 
     # Telegram aynı mesajı yeniden iletirse ikinci kez kayıt oluşturma.
     for task in state["tasks"]:
@@ -341,7 +337,7 @@ def record_feedback_message(command, session, update_id):
     day = state.get("day")
 
     if not isinstance(day, dict) or day.get("date") != today:
-        return "Bugünün zaman bütçesi yok. Şimdilik CLI üzerinden belirle."
+        return "Bugünün zaman bütçesi yok. /gun komutuyla belirle."
 
     remaining = day.get("remaining_minutes")
 
@@ -381,7 +377,6 @@ def record_feedback_message(command, session, update_id):
     task["next_action"] = None if feedback == "done" else work["action"]
     day["remaining_minutes"] = max(0, remaining - spent_minutes)
 
-    save_state(state)
 
     # Aynı çalışma için yanlışlıkla tekrar feedback girilmesini önle.
     session.pop("work", None)
@@ -395,7 +390,7 @@ def record_feedback_message(command, session, update_id):
         "Bir sonraki çalışma için yeni bir /plan oluştur."
     )
 
-def set_day_message(command, session, update_id, message_date):
+def set_day_message(command, session, update_id, message_date, state):
     parts = command.split()
 
     if len(parts) != 3:
@@ -416,7 +411,6 @@ def set_day_message(command, session, update_id, message_date):
     if sent_day != today:
         return "Bu günlük ayar mesajı önceki güne ait. Yeniden /gun gönder."
 
-    state = load_state()
     saved_day = state.get("day")
 
     if (
@@ -438,7 +432,6 @@ def set_day_message(command, session, update_id, message_date):
     day["telegram_settings_update_id"] = update_id
 
     state["day"] = day
-    save_state(state)
 
     session.pop("plan", None)
     session.pop("work", None)
@@ -450,7 +443,7 @@ def set_day_message(command, session, update_id, message_date):
         "Önceki plan önizlemesi temizlendi. Yeni bir /plan oluştur."
     )
 
-def add_task_message(command, session, update_id):
+def add_task_message(command, session, update_id, state):
     usage = (
         "Kullanım:\n"
         "/ekle görev | önem | dakika | yük | deadline | hedef | bağlam\n\n"
@@ -497,14 +490,12 @@ def add_task_message(command, session, update_id):
             + usage
         )
 
-    state = load_state()
 
     for existing_task in state["tasks"]:
         if existing_task.get("telegram_created_update_id") == update_id:
             return "Bu mesajdaki görev daha önce kaydedildi."
 
     state["tasks"].append(task)
-    save_state(state)
 
     session.pop("plan", None)
     session.pop("work", None)
@@ -518,8 +509,7 @@ def add_task_message(command, session, update_id):
         "Yeni bir /plan oluştur."
     )
 
-def list_tasks_message():
-    state = load_state()
+def list_tasks_message(state):
     lines = ["Görevler — kimlik | durum | ad"]
 
     for task in state["tasks"]:
@@ -552,14 +542,13 @@ def list_tasks_message():
     return "\n".join(lines)
 
 
-def change_task_status_message(command, session, update_id):
+def change_task_status_message(command, session, update_id, state):
     parts = command.split()
 
     if len(parts) != 2:
         return "Önce /gorevler yaz. Örnek kullanım: /arsiv 1234abcd"
 
     operation, short_id = parts
-    state = load_state()
 
     matches = [
         task for task in state["tasks"]
@@ -591,7 +580,6 @@ def change_task_status_message(command, session, update_id):
         return "Geçersiz durum komutu."
 
     task["telegram_status_update_id"] = update_id
-    save_state(state)
 
     session.pop("plan", None)
     session.pop("work", None)
@@ -601,111 +589,273 @@ def change_task_status_message(command, session, update_id):
         "Geçmiş kayıtlar korundu. Yeni seçim için /plan oluştur."
     )
 
-def main():
-    token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
-    owner_text = os.environ.get("TELEGRAM_ALLOWED_USER_ID", "").strip()
 
-    if not re.fullmatch(r"[0-9]+:[A-Za-z0-9_-]+", token):
+def help_message():
+    return (
+        "Checkpoint komutları\n\n"
+        "/gun 40 3 — Kalan süreyi 40, enerjiyi 3 olarak ayarla\n"
+        "/bugun — Günlük durum\n"
+        "/plan 25 3 — Plan önizlemesi\n"
+        "/sec 1 — Plandaki görevi seç\n"
+        "/devam — Saklanan planı ve bekleyen eylemi göster\n"
+        "/eylem metin — Seçili görev için kendi eylemini yaz\n"
+        "/kaydet continue 5 — 5 dakika çalıştım, devam edeceğim\n"
+        "/kaydet done 10 | çıktı — Adım tamamlandı\n"
+        "/kaydet blocked 2 | engel — Engeli kaydet\n\n"
+        "/ekle görev | önem | dakika | yük | deadline | hedef | bağlam\n"
+        "Yük: low/medium/high; deadline yoksa -\n\n"
+        "/gorevler — Görev kimlikleri ve durumları\n"
+        "/arsiv kimlik — Arşivle\n"
+        "/ac kimlik — Yeniden aç, engeli kaldır\n"
+        "/tamamla kimlik — Ana görevi tamamlandı olarak işaretle\n\n"
+        "Süre kendi bildirimindir. /gun süre eklemez, kalan süreyi değiştirir.\n"
+        "Yeni plan, görev veya günlük ayar bekleyen seçimi temizler."
+        "/duzenle kimlik | hedef | bağlam — Görev bilgilerini güncelle; aynı alan için -\n"
+    )
+
+
+def resume_message(session, state):
+    plan = session.get('plan')
+    if not plan:
+        return 'Bekleyen plan yok. /plan dakika enerji ile başlayabilirsin.'
+    if plan['date'] != date.today().isoformat():
+        return 'Saklanan plan önceki güne ait. /gun ve /plan ile bugünü başlat.'
+    tasks = {task['id']: task for task in state['tasks']}
+    lines = ['Saklanan plan:']
+    for number, task_id in enumerate(plan['task_ids'], start=1):
+        task = tasks.get(task_id)
+        title = task['title'][:150] if task else 'Artık bulunmayan görev'
+        lines.append(f"{number}. {title} | {plan['work_minutes_by_id'][task_id]} dakika")
+    work = session.get('work')
+    if not work:
+        lines.append('Henüz çalışma seçilmedi. /sec 1 veya /sec 2 yaz.')
+    else:
+        task = tasks.get(work['task_id'])
+        if not task or task.get('archived') or task.get('completed') or is_task_blocked(task):
+            lines.append('Bekleyen görev artık uygun değil; yeni bir /plan oluştur.')
+        else:
+            lines.append(f"\nSeçili görev: {task['title'][:150]}")
+            lines.append(f"Eylem: {work['action'][:2200]}")
+            lines.append(f"Planlanan süre: {work['planned_minutes']} dakika")
+            lines.append('Sonucu /kaydet ile bildirebilirsin.')
+    return '\n'.join(lines)
+
+
+def get_runtime(state, owner_id):
+    runtime = state.setdefault('telegram', {
+        'owner_id': owner_id,
+        'offset': 0,
+        'session': {},
+        'pending_reply': None,
+    })
+    valid = isinstance(runtime, dict)
+    if valid:
+        valid = (
+            type(runtime.get('owner_id')) is int
+            and runtime['owner_id'] == owner_id
+            and type(runtime.get('offset')) is int
+            and runtime['offset'] >= 0
+            and isinstance(runtime.get('session'), dict)
+        )
+    if not valid:
+        raise SystemExit('Telegram kaydı geçersiz veya başka hesaba ait. Dosya değiştirilmedi.')
+    session = runtime['session']
+    plan = session.get('plan')
+    work = session.get('work')
+    try:
+        if plan is not None:
+            if not (isinstance(plan, dict)):
+                raise ValueError("Geçersiz oturum alanı")
+            if not (isinstance(plan['date'], str)):
+                raise ValueError("Geçersiz oturum alanı")
+            if not (date.fromisoformat(plan['date']).isoformat() == plan['date']):
+                raise ValueError("Geçersiz oturum alanı")
+            if not (type(plan['energy']) is int and 1 <= plan['energy'] <= 5):
+                raise ValueError("Geçersiz oturum alanı")
+            ids = plan['task_ids']
+            if not (isinstance(ids, list) and 1 <= len(ids) <= 2):
+                raise ValueError("Geçersiz oturum alanı")
+            if not (all(isinstance(item, str) and item for item in ids)):
+                raise ValueError("Geçersiz oturum alanı")
+            if not (len(set(ids)) == len(ids)):
+                raise ValueError("Geçersiz oturum alanı")
+            minutes = plan['work_minutes_by_id']
+            if not (isinstance(minutes, dict) and set(minutes) == set(ids)):
+                raise ValueError("Geçersiz oturum alanı")
+            if not (all(type(value) is int and value > 0 for value in minutes.values())):
+                raise ValueError("Geçersiz oturum alanı")
+        if work is not None:
+            if not (isinstance(work, dict) and plan is not None):
+                raise ValueError("Geçersiz oturum alanı")
+            if not (work['task_id'] in plan['task_ids']):
+                raise ValueError("Geçersiz oturum alanı")
+            if not (isinstance(work['action'], str) and work['action'].strip()):
+                raise ValueError("Geçersiz oturum alanı")
+            if not (type(work['planned_minutes']) is int):
+                raise ValueError("Geçersiz oturum alanı")
+            if not (work['planned_minutes'] == plan['work_minutes_by_id'][work['task_id']]):
+                raise ValueError("Geçersiz oturum alanı")
+            if not (type(work['energy']) is int and work['energy'] == plan['energy']):
+                raise ValueError("Geçersiz oturum alanı")
+        pending = runtime.get('pending_reply')
+        if pending is not None:
+            if not (isinstance(pending, dict)):
+                raise ValueError("Geçersiz oturum alanı")
+            if not (type(pending['chat_id']) is int and pending['chat_id'] == owner_id):
+                raise ValueError("Geçersiz oturum alanı")
+            if not (isinstance(pending['text'], str) and pending['text']):
+                raise ValueError("Geçersiz oturum alanı")
+    except (AssertionError, KeyError, TypeError, ValueError):
+        raise SystemExit('Saklanan Telegram oturumu geçersiz. Dosya değiştirilmedi.') from None
+    return runtime
+
+def edit_task_message(command, session, state):
+    parts = command.split(maxsplit=1)
+
+    if len(parts) != 2:
+        return "Kullanım: /duzenle kimlik | hedef sonuç | bağlam"
+
+    fields = [field.strip() for field in parts[1].split("|")]
+
+    if len(fields) != 3 or not all(fields):
+        return (
+            "Üç alan gerekli: kimlik | hedef sonuç | bağlam\n"
+            "Aynı kalacak alan için - yaz."
+        )
+
+    short_id, outcome, context = fields
+
+    matches = [
+        task for task in state["tasks"]
+        if task["id"].startswith(short_id)
+    ]
+
+    if len(short_id) < 8 or len(matches) != 1:
+        return "Görev kimliği bulunamadı veya belirsiz. /gorevler yaz."
+
+    task = matches[0]
+    changed = False
+
+    if outcome != "-" and outcome != task.get("desired_outcome"):
+        task["desired_outcome"] = outcome
+        changed = True
+
+    if context != "-" and context != task.get("context"):
+        task["context"] = context
+        changed = True
+
+    if not changed:
+        return "Bilgiler aynı; görev değiştirilmedi."
+
+    task["next_action"] = None
+    session.pop("plan", None)
+    session.pop("work", None)
+
+    return (
+        f"Görev güncellendi: {task['title'][:150]}\n"
+        "Eski eylem ve bekleyen plan temizlendi; checkpoint geçmişi korundu.\n"
+        "Yeni bir /plan oluşturabilirsin."
+    )
+
+def dispatch_message(text, session, state, update_id, message_date):
+    command = text.split(maxsplit=1)[0] if text else ''
+    if command in ['/start', '/yardim']:
+        return help_message()
+    if command == '/bugun':
+        return build_today_message(state)
+    if command == '/gorevler':
+        return list_tasks_message(state)
+    if command == '/devam':
+        return resume_message(session, state)
+    sent_day = datetime.fromtimestamp(message_date).astimezone().date()
+    if sent_day != date.today():
+        return 'Bu komut önceki güne ait; işlenmedi. Güncel komutunu yeniden gönder.'
+    if command == '/gun':
+        return set_day_message(text, session, update_id, message_date, state)
+    if command == '/plan':
+        return build_plan_message(text, session, state)
+    if command == '/sec':
+        return select_work_message(text, session, state)
+    if command == '/eylem':
+        return set_action_message(text, session)
+    if command == '/kaydet':
+        return record_feedback_message(text, session, update_id, state)
+    if command == '/ekle':
+        return add_task_message(text, session, update_id, state)
+    if command == "/duzenle":
+        return edit_task_message(text, session, state)
+    if command in ['/arsiv', '/tamamla', '/ac']:
+        return change_task_status_message(text, session, update_id, state)
+    return 'Komutları görmek için /yardim yaz.'
+
+
+def process_update(update, owner_id):
+    # Tek yükleme + tek atomik kayıt: görev, oturum ve mesaj konumu birlikte saklanır.
+    state = load_state()
+    runtime = get_runtime(state, owner_id)
+    update_id = update['update_id']
+    if runtime.get('pending_reply') is not None:
+        raise RuntimeError('Önce bekleyen yanıt gönderilmeli.')
+    if update_id < runtime['offset']:
+        return False
+    message = update.get('message', {})
+    sender_id = message.get('from', {}).get('id')
+    chat = message.get('chat', {})
+    if sender_id == owner_id and chat.get('type') == 'private' and chat.get('id') == owner_id:
+        reply = dispatch_message(
+            message.get('text', '').strip(), runtime['session'], state,
+            update_id, message['date'],
+        )
+        runtime['pending_reply'] = {'chat_id': owner_id, 'text': reply}
+    runtime['offset'] = update_id + 1
+    save_state(state)
+    return True
+
+
+def flush_pending_reply(token, owner_id):
+    state = load_state()
+    runtime = get_runtime(state, owner_id)
+    pending = runtime.get('pending_reply')
+    if pending is None:
+        return
+    telegram_request(token, 'sendMessage', pending)
+    runtime['pending_reply'] = None
+    save_state(state)
+
+
+def main():
+    token = os.environ.get('TELEGRAM_BOT_TOKEN', '').strip()
+    owner_text = os.environ.get('TELEGRAM_ALLOWED_USER_ID', '').strip()
+    if not re.fullmatch(r'[0-9]+:[A-Za-z0-9_-]+', token):
         print("Telegram token'ı eksik veya biçimi geçersiz.")
         return
-
-    if not re.fullmatch(r"[0-9]+", owner_text) or int(owner_text) <= 0:
-        print("TELEGRAM_ALLOWED_USER_ID geçerli bir kullanıcı kimliği olmalı.")
+    if not re.fullmatch(r'[0-9]+', owner_text) or int(owner_text) <= 0:
+        print('TELEGRAM_ALLOWED_USER_ID geçerli bir kullanıcı kimliği olmalı.')
         return
-
     owner_id = int(owner_text)
-    offset = 0
-    session = {}
-
-    print("Bot çalışıyor. Telegram'dan /bugun gönder.")
-    print("Durdurmak için Ctrl+C.")
-
+    get_runtime(load_state(), owner_id)
+    print('Bot çalışıyor. /yardim komutları, /devam bekleyen çalışmayı gösterir.')
+    print('Aynı anda yalnızca bir bot çalıştır. CLI ile eşzamanlı kullanma. Ctrl+C ile durdur.')
     while True:
         try:
-            updates = telegram_request(
-                token,
-                "getUpdates",
-                {
-                    "offset": offset,
-                    "timeout": 25,
-                    "allowed_updates": ["message"],
-                },
-            )
-
+            flush_pending_reply(token, owner_id)
+            runtime = get_runtime(load_state(), owner_id)
+            updates = telegram_request(token, 'getUpdates', {
+                'offset': runtime['offset'], 'timeout': 25,
+                'allowed_updates': ['message'],
+            })
             for update in updates:
-                offset = update["update_id"] + 1
-                message = update.get("message", {})
-                sender_id = message.get("from", {}).get("id")
-                chat = message.get("chat", {})
-
-                if sender_id != owner_id or chat.get("type") != "private":
-                    continue
-
-                text = message.get("text", "").strip()
-
-                command = text.split(maxsplit=1)[0] if text else ""
-
-                try:
-                    if command == "/start":
-                        reply = (
-                            "Checkpoint hazır.\n"
-                            "/bugun — Kalan süre ve açık görevler\n"
-                            "/plan 25 3 — 25 dakika, enerji 3 için plan önizlemesi"
-                        )
-                    elif command == "/bugun":
-                        reply = build_today_message()
-                    elif command == "/gun":
-                        reply = set_day_message(
-                            text,
-                            session,
-                            update["update_id"],
-                            message["date"],
-                        )
-                    elif command == "/plan":
-                        reply = build_plan_message(text, session)
-                    elif command == "/sec":
-                        reply = select_work_message(text, session)
-                    elif command == "/eylem":
-                        reply = set_action_message(text, session)
-                    elif command == "/kaydet":
-                        reply = record_feedback_message(
-                            text, session, update["update_id"]
-                        )
-                    elif command == "/ekle":
-                        reply = add_task_message(
-                            text, session, update["update_id"]
-                        )
-                    elif command == "/gorevler":
-                        reply = list_tasks_message()
-                    elif command in ["/arsiv", "/tamamla", "/ac"]:
-                        reply = change_task_status_message(
-                            text, session, update["update_id"]
-                        )
-                    else:
-                        reply = (
-                            "Durum için /bugun yaz.\n"
-                            "Plan için örnek: /plan 25 3"
-                        )
-                except SystemExit:
-                    reply = (
-                        "Kayıt dosyası okunamadı, doğrulanamadı veya yazılamadı. "
-                        "İşlem tamamlanamadı; dosyayı kontrol et."
-                    )
-
-                telegram_request(
-                    token,
-                    "sendMessage",
-                    {"chat_id": chat["id"], "text": reply},
-                )
-
+                process_update(update, owner_id)
+                flush_pending_reply(token, owner_id)
         except RuntimeError as error:
             print(error)
-            print("5 saniye sonra bağlantı yeniden denenecek.")
+            print('5 saniye sonra yeniden denenecek; bekleyen yanıt korunuyor.')
             time.sleep(5)
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     try:
         main()
     except KeyboardInterrupt:
-        print("\nBot durduruldu.")
+        print('\nBot durduruldu.')
+

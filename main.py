@@ -733,7 +733,7 @@ def main():
     if active_task_ids:
         daily_win_id = active_task_ids[0]
 
-    state = {
+    state.update({
         "tasks": tasks,
         "day": day,
         "selection": {
@@ -741,7 +741,7 @@ def main():
             "daily_win_id": daily_win_id,
             "work_minutes_by_id": work_minutes_by_id,
         },
-    }
+    })
 
     save_state(state)
     print(f"Durum kaydedildi: {STATE_PATH}")
