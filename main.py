@@ -1,187 +1,13 @@
+"""Terminal interface for the same planning and progress rules as Telegram."""
+
+from datetime import date, datetime
+from uuid import uuid4
+
 from openai import APIError
 from llm import generate_next_action
-from uuid import uuid4
-import json
-from pathlib import Path
-from datetime import date, datetime
-from planning import calculate_work_minutes
-
-STATE_PATH = Path(__file__).resolve().parent / "state.json"
-
-def save_state(state):
-    json_text = json.dumps(state, ensure_ascii=False, indent=2)
-    temporary_path = STATE_PATH.with_suffix(".tmp")
-
-    try:
-        temporary_path.write_text(json_text, encoding="utf-8")
-        temporary_path.replace(STATE_PATH)
-    except OSError as error:
-        raise SystemExit(f"Durum kaydedilemedi: {error}")
-
-def is_valid_task(task):
-    if "completed" in task and type(task["completed"]) is not bool:
-        return False
-
-    title = task.get("title")
-    if not isinstance(title, str) or not title.strip():
-        return False
-
-    importance = task.get("importance")
-    if type(importance) is not int or not 1 <= importance <= 5:
-        return False
-
-    minutes = task.get("estimated_minutes")
-    if type(minutes) is not int or minutes <= 0:
-        return False
-
-    if task.get("cognitive_load") not in ["low", "medium", "high"]:
-        return False
-
-    if "deadline" not in task:
-        return False
-
-    deadline = task["deadline"]
-
-    if deadline is not None:
-        if not isinstance(deadline, str):
-            return False
-
-        try:
-            parsed_deadline = date.fromisoformat(deadline)
-        except ValueError:
-            return False
-
-        if parsed_deadline.isoformat() != deadline:
-            return False
-    if "blocked" in task and type(task["blocked"]) is not bool:
-        return False
-    if "archived" in task and type(task["archived"]) is not bool:
-        return False
-
-    next_action = task.get("next_action")
-
-    if next_action is not None:
-        if not isinstance(next_action, str) or not next_action.strip():
-            return False
-    if "desired_outcome" in task:
-        outcome = task["desired_outcome"]
-
-        if not isinstance(outcome, str) or not outcome.strip():
-            return False
-    if "context" in task:
-        context = task["context"]
-
-        if not isinstance(context, str) or not context.strip():
-            return False
-        
-    checkpoints = task.get("checkpoints", [])
-
-    if not isinstance(checkpoints, list):
-        return False
-
-    for expected_version, checkpoint in enumerate(checkpoints, start=1):
-        if not isinstance(checkpoint, dict):
-            return False
-
-        version = checkpoint.get("version")
-        if type(version) is not int or version != expected_version:
-            return False
-
-        action = checkpoint.get("action")
-        if not isinstance(action, str) or not action.strip():
-            return False
-
-        feedback = checkpoint.get("feedback")
-        if feedback not in ["done", "blocked", "continue"]:
-            return False
-
-        if "output_note" in checkpoint:
-            output_note = checkpoint["output_note"]
-
-            if feedback == "done":
-                if not isinstance(output_note, str) or not output_note.strip():
-                    return False
-            elif output_note is not None:
-                return False
-        if "planned_minutes" in checkpoint:
-            planned = checkpoint["planned_minutes"]
-
-            if type(planned) is not int or planned <= 0:
-                return False
-
-        if "spent_minutes" in checkpoint:
-            spent = checkpoint["spent_minutes"]
-
-            if type(spent) is not int or spent < 0:
-                return False
-        blocker = checkpoint.get("blocker")
-        if feedback == "blocked":
-            if not isinstance(blocker, str) or not blocker.strip():
-                return False
-        elif blocker is not None:
-            return False
-
-        recorded_at = checkpoint.get("recorded_at")
-        if not isinstance(recorded_at, str):
-            return False
-
-        try:
-            timestamp = datetime.fromisoformat(recorded_at)
-        except ValueError:
-            return False
-
-        if timestamp.utcoffset() is None:
-            return False
-        
-    return True
-
-def load_state():
-    try:
-        json_text = STATE_PATH.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        return {"tasks": [], "day": None}
-    except OSError as error:
-        raise SystemExit(f"Kayıt dosyası okunamadı: {error}")
-
-    try:
-        state = json.loads(json_text)
-    except json.JSONDecodeError:
-        raise SystemExit("state.json geçerli JSON değil. Dosya değiştirilmedi.")
-
-    if not isinstance(state, dict):
-        raise SystemExit("State bir dictionary olmalı. Dosya değiştirilmedi.")
-
-    if not isinstance(state.get("tasks"), list):
-        raise SystemExit("State içinde tasks listesi olmalı. Dosya değiştirilmedi.")
-
-    seen_ids = []
-
-    for position, task in enumerate(state["tasks"], start=1):
-        if not is_valid_task(task):
-            raise SystemExit(
-                f"Kayıttaki {position}. görev geçersiz. Dosya değiştirilmedi."
-            )
-
-        if "id" not in task:
-            task["id"] = str(uuid4())
-
-        task_id = task["id"]
-
-        if not isinstance(task_id, str) or not task_id.strip():
-            raise SystemExit(
-                f"Kayıttaki {position}. görev kimliği geçersiz. "
-                "Dosya değiştirilmedi."
-            )
-
-        if task_id in seen_ids:
-            raise SystemExit(
-                f"Kayıttaki {position}. görev kimliği tekrarlanıyor. "
-                "Dosya değiştirilmedi."
-            )
-
-        seen_ids.append(task_id)
-
-    return state
+from planning import calculate_priority, is_task_blocked, select_active_tasks
+from storage import STATE_PATH, load_state, save_state
+from workflow import record_checkpoint, update_task_context, daily_summary
 
 def read_positive_integer(prompt):
     while True:
@@ -266,59 +92,6 @@ def read_task():
         "deadline": deadline,
     }
 
-def days_until_deadline(deadline, today):
-    if deadline is None:
-        return None
-
-    deadline_date = date.fromisoformat(deadline)
-    difference = deadline_date - today
-
-    return difference.days
-
-def calculate_priority(task, energy, today):
-    score = task["importance"] * 2
-    reasons = [f"Önem katkısı: {task['importance']} × 2 = {score}."]
-
-    days_left = days_until_deadline(task["deadline"], today)
-
-    if days_left is None:
-        reasons.append("Deadline belirtilmedi: +0.")
-    elif days_left <= 0:
-        score += 4
-        reasons.append("Deadline bugün veya geçmiş: +4.")
-    elif days_left == 1:
-        score += 3
-        reasons.append("Deadline yarın: +3.")
-    elif days_left <= 3:
-        score += 1
-        reasons.append("Deadline 2–3 gün içinde: +1.")
-    else:
-        reasons.append("Deadline 3 günden daha uzakta: +0.")
-
-    penalty = 0
-
-    if energy <= 2:
-        if task["cognitive_load"] == "high":
-            penalty = 3
-        elif task["cognitive_load"] == "medium":
-            penalty = 1
-
-    score -= penalty
-    reasons.append(
-        f"Enerji {energy}/5, bilişsel yük {task['cognitive_load']}: "
-        f"kesinti {penalty}."
-    )
-
-    return {"score": score, "reasons": reasons}
-
-def is_task_blocked(task):
-    if "blocked" in task:
-        return task["blocked"]
-
-    checkpoints = task.get("checkpoints", [])
-    return bool(checkpoints) and checkpoints[-1]["feedback"] == "blocked"
-
-
 def review_blocked_tasks(tasks):
     for task in tasks:
         if not is_task_blocked(task):
@@ -338,35 +111,6 @@ def review_blocked_tasks(tasks):
                 break
 
             print("Lütfen e veya h gir.")
-
-def select_active_tasks(tasks, available_minutes, energy, today):
-    ranked_tasks = sorted(
-        tasks,
-        key=lambda task: calculate_priority(task, energy, today)["score"],
-        reverse=True,
-    )
-
-    active_tasks = []
-    work_minutes_by_id = {}
-    remaining_minutes = available_minutes
-
-    for task in ranked_tasks:
-        if len(active_tasks) == 2 or remaining_minutes <= 0:
-            break
-
-        if is_task_blocked(task):
-            continue
-
-        work_minutes = calculate_work_minutes(
-            task["estimated_minutes"],
-            remaining_minutes,
-        )
-
-        active_tasks.append(task)
-        work_minutes_by_id[task["id"]] = work_minutes
-        remaining_minutes -= work_minutes
-
-    return active_tasks, work_minutes_by_id
 
 def read_feedback():
     while True:
@@ -549,64 +293,19 @@ def read_day(state, today):
     }
 
 def show_daily_summary(tasks, today):
-    completed = []
-    continued = 0
-    blocked = 0
-    recorded_minutes = 0
-    missing_duration = 0
+    summary = daily_summary(tasks, today)
+    print("\n--- Bugünkü ilerlemen ---")
+    print(f"Tamamladığını bildirdiğin adım: {summary['counts']['done']}")
+    print(f"Devam ettiğin çalışma: {summary['counts']['continue']}")
+    print(f"Engelle karşılaştığın çalışma: {summary['counts']['blocked']}")
+    print(f"Kaydettiğin çalışma süresi: {summary['spent_minutes']} dakika")
+    if summary["missing_duration"]:
+        print(f"Süresi belirtilmemiş eski kayıt: {summary['missing_duration']}")
+    for _, task, checkpoint in summary["completed"]:
+        print(f"\n{task['title']}: {checkpoint['action']}")
+        print(f"Çıktın: {checkpoint.get('output_note') or 'Açıklama kaydedilmemiş.'}")
+    print("Bu özet senin bildirdiklerine dayanıyor; çıktıları kendiliğinden doğrulamaz.")
 
-    for task in tasks:
-        for checkpoint in task.get("checkpoints", []):
-            recorded_at = datetime.fromisoformat(
-                checkpoint["recorded_at"]
-            ).astimezone()
-
-            if recorded_at.date() != today:
-                continue
-
-            if "spent_minutes" in checkpoint:
-                recorded_minutes += checkpoint["spent_minutes"]
-            else:
-                missing_duration += 1
-
-            feedback = checkpoint["feedback"]
-
-            if feedback == "done":
-                completed.append((task["title"], checkpoint))
-            elif feedback == "continue":
-                continued += 1
-            elif feedback == "blocked":
-                blocked += 1
-
-    print("\n--- Bugünün özeti ---")
-    print(f"Tarih: {today}")
-    print(f"Tamamlandı bildirimi: {len(completed)}")
-    print(f"Devam bildirimi: {continued}")
-    print(f"Engel bildirimi: {blocked}")
-    print(f"Kaydedilmiş çalışma süresi: {recorded_minutes} dakika")
-
-    if missing_duration:
-        print(
-            f"Not: {missing_duration} eski kayıtta süre bilgisi yok; "
-            "süre toplamına dahil edilmedi."
-        )
-
-    if not completed:
-        print("Bugün henüz tamamlandı bildirimi yok.")
-        return
-
-    print("\nTamamlanan adımlar ve bildirdiğin çıktılar:")
-
-    for number, (title, checkpoint) in enumerate(completed, start=1):
-        print(f"{number}. {title}")
-        print(f"   Eylem: {checkpoint['action']}")
-
-        output_note = checkpoint.get("output_note")
-
-        if output_note:
-            print(f"   Çıktı: {output_note}")
-        else:
-            print("   Çıktı açıklaması kaydedilmemiş.")
 
 def choose_work_task(active_tasks, work_minutes_by_id):
     if not active_tasks:
@@ -643,20 +342,7 @@ def choose_work_task(active_tasks, work_minutes_by_id):
 
         return active_tasks[index]
 
-def main():
-                
-    state = load_state()
-
-    today = date.today()
-    day = read_day(state, today)
-    available_minutes = day["remaining_minutes"]
-
-    energy = read_energy()
-    day["energy"] = energy
-
-    tasks = state["tasks"]
-    print(f"Kayıttan yüklenen görev: {len(tasks)}")
-
+def manage_tasks(state, today):
     while True:
         command = input(
             "Görev ekle: Enter | Arşiv: a | Günlük özet: o | Planla: q: "
@@ -668,7 +354,7 @@ def main():
             manage_archive(state)
             continue
         if command == "o":
-            show_daily_summary(tasks, today)
+            show_daily_summary(state["tasks"], today)
             continue
 
         if command != "":
@@ -678,8 +364,122 @@ def main():
         task = read_task()
 
         if task is not None:
-            tasks.append(task)
+            state["tasks"].append(task)
+            save_state(state)
             print("Görev listeye eklendi.")
+
+
+def review_task_context(work_task, state):
+    if not work_task.get("desired_outcome"):
+        print(f"Görev: {work_task['title']}")
+        outcome = read_nonempty_text(
+            "Bu görev bittiğinde elinde somut olarak ne olmalı? "
+        )
+        update_task_context(work_task, outcome, None)
+        save_state(state)
+
+    print(f"Hedef sonuç: {work_task['desired_outcome']}")
+    if not work_task.get("context"):
+        context = read_nonempty_text(
+            "Şu an hangi aşamadasın, sıradaki ihtiyaç ve sınırlar neler? "
+        )
+        update_task_context(work_task, None, context)
+        save_state(state)
+    print(f"Mevcut bağlam: {work_task['context']}")
+
+    while True:
+        choice = input(
+            "Hedefi/bağlamı düzenlemek için d, devam etmek için Enter: "
+        ).strip().lower()
+
+        if choice == "":
+            break
+
+        if choice != "d":
+            print("Lütfen d yaz veya Enter'a bas.")
+            continue
+
+        new_outcome = input(
+            "Yeni hedef sonuç (aynı kalacaksa Enter): "
+        ).strip()
+
+        new_context = input(
+            "Yeni bağlam (aynı kalacaksa Enter): "
+        ).strip()
+
+        changed = update_task_context(work_task, new_outcome or None, new_context or None)
+        if changed:
+            print("Hedef veya bağlam değişti. Buna uygun bir sonraki adımı yeniden seçelim.")
+
+        save_state(state)
+        print("Görev bilgileri kaydedildi.")
+        break
+
+
+def collect_feedback(work_task, day, action, work_minutes, state):
+    feedback = read_feedback()
+    spent_minutes = read_nonnegative_integer(
+        "Bu adım üzerinde bu kez kaç dakika çalıştın? "
+    )
+    output_note = None
+
+    if feedback == "done":
+        output_note = read_nonempty_text(
+            "Somut olarak ne ürettin veya neyi değiştirdin? "
+        )
+
+        while True:
+            answer = input(
+                "Ana görevin hedef sonucu da tamamen gerçekleşti mi? (e/h): "
+            ).strip().lower()
+
+            if answer in ["e", "h"]:
+                work_task["completed"] = answer == "e"
+                break
+
+            print("Lütfen e veya h gir.")
+    blocker = None
+
+    if feedback == "blocked":
+        while True:
+            blocker = input("İlerlemeyi ne engelliyor? ").strip()
+
+            if blocker:
+                break
+
+            print("Lütfen engeli kısaca belirt.")
+
+    checkpoint = record_checkpoint(
+        work_task, day, action, feedback, work_minutes, spent_minutes,
+        note=output_note if feedback == "done" else blocker,
+    )
+
+    save_state(state)
+
+    print(
+        f"Checkpoint v{checkpoint['version']} kaydedildi: {feedback}"
+    )
+    print(
+        f"Kalan süre: {day['remaining_minutes']} dakika"
+        )
+
+
+def main():
+
+    state = load_state()
+
+    today = date.today()
+    day = read_day(state, today)
+    available_minutes = day["remaining_minutes"]
+
+    energy = read_energy()
+    day["energy"] = energy
+    state["day"] = day
+
+    tasks = state["tasks"]
+    print(f"Kayıttan yüklenen görev: {len(tasks)}")
+
+    manage_tasks(state, today)
     open_tasks = [
         task for task in tasks
         if not task.get("archived", False)
@@ -720,7 +520,7 @@ def main():
 
             print(
                 f"  Seçim: Öncelik sırasına göre {work_minutes} dakika ayrıldı. "
-                "Toplam zaman bütçesi ve iki aktif görev sınırı korundu."
+                "Ayırabileceğin süre aşılmadı; en fazla iki görev önerildi."
             )
 
     active_task_ids = []
@@ -749,52 +549,8 @@ def main():
     work_task = choose_work_task(active_tasks, work_minutes_by_id)
 
     if work_task is not None:
-        if not work_task.get("desired_outcome"):
-            print(f"Görev: {work_task['title']}")
-            work_task["desired_outcome"] = read_nonempty_text(
-                "Bu görev bittiğinde elinde somut olarak ne olmalı? "
-            )
-            save_state(state)
+        review_task_context(work_task, state)
 
-        print(f"Hedef sonuç: {work_task['desired_outcome']}")
-        if not work_task.get("context"):
-            work_task["context"] = read_nonempty_text(
-                "Şu an hangi aşamadasın, sıradaki ihtiyaç ve sınırlar neler? "
-            )
-            save_state(state)
-        print(f"Mevcut bağlam: {work_task['context']}")
-
-        while True:
-            choice = input(
-                "Hedefi/bağlamı düzenlemek için d, devam etmek için Enter: "
-            ).strip().lower()
-
-            if choice == "":
-                break
-
-            if choice != "d":
-                print("Lütfen d yaz veya Enter'a bas.")
-                continue
-
-            new_outcome = input(
-                "Yeni hedef sonuç (aynı kalacaksa Enter): "
-            ).strip()
-
-            new_context = input(
-                "Yeni bağlam (aynı kalacaksa Enter): "
-            ).strip()
-
-            if new_outcome:
-                work_task["desired_outcome"] = new_outcome
-
-            if new_context:
-                work_task["context"] = new_context
-
-            save_state(state)
-            print("Görev bilgileri kaydedildi.")
-            break
-
-        
         work_minutes = work_minutes_by_id[work_task["id"]]
 
         action = review_next_action(work_task, work_minutes, energy)
@@ -804,71 +560,10 @@ def main():
             save_state(state)
             print(f"Çalışacağın eylem: {action}")
 
-            feedback = read_feedback()
-            spent_minutes = read_nonnegative_integer(
-                "Bu çalışmada, son checkpoint'ten beri kaç dakika harcadın? "
-            )
-            output_note = None
-
-            if feedback == "done":
-                output_note = read_nonempty_text(
-                    "Somut olarak ne ürettin veya neyi değiştirdin? "
-                )
-
-                while True:
-                    answer = input(
-                        "Ana görevin hedef sonucu da tamamen gerçekleşti mi? (e/h): "
-                    ).strip().lower()
-
-                    if answer in ["e", "h"]:
-                        work_task["completed"] = answer == "e"
-                        break
-
-                    print("Lütfen e veya h gir.")
-            blocker = None
-
-            if feedback == "blocked":
-                while True:
-                    blocker = input("İlerlemeyi ne engelliyor? ").strip()
-
-                    if blocker:
-                        break
-
-                    print("Lütfen engeli kısaca belirt.")
-
-            checkpoints = work_task.setdefault("checkpoints", [])
-
-            checkpoint = {
-                "version": len(checkpoints) + 1,
-                "action": action,
-                "feedback": feedback,
-                "blocker": blocker,
-                "recorded_at": datetime.now().astimezone().isoformat(),
-                "output_note": output_note,
-                "planned_minutes": work_minutes,
-                "spent_minutes": spent_minutes,
-            }
-
-            checkpoints.append(checkpoint)
-            day["remaining_minutes"] = max(
-                0,
-                day["remaining_minutes"] - spent_minutes,
-            )
-            work_task["blocked"] = feedback == "blocked"
-
-            if feedback == "done":
-                work_task["next_action"] = None
-
-            save_state(state)
-
-            print(
-                f"Checkpoint v{checkpoint['version']} kaydedildi: {feedback}"
-            )
-            print(
-                f"Kalan süre: {day['remaining_minutes']} dakika"
-                )
+            collect_feedback(work_task, day, action, work_minutes, state)
 
     show_daily_summary(tasks, today)
+
 
 if __name__ == "__main__":
     main()

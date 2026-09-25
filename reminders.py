@@ -41,6 +41,9 @@ def queue_daily_reminder(state, owner_id, now=None):
     runtime = state["telegram"]
     reminder = runtime.get("reminder", {})
 
+    if not isinstance(reminder, dict):
+        raise ValueError("Hatırlatma kaydı geçersiz.")
+
     if not reminder.get("enabled"):
         return False
 
@@ -49,7 +52,7 @@ def queue_daily_reminder(state, owner_id, now=None):
 
     time_text = reminder.get("time", "")
 
-    if not re.fullmatch(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]", time_text):
+    if not isinstance(time_text, str) or not re.fullmatch(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]", time_text):
         return False
 
     today = now.date().isoformat()
@@ -71,11 +74,12 @@ def queue_daily_reminder(state, owner_id, now=None):
     runtime["pending_reply"] = {
         "chat_id": owner_id,
         "text": (
-            f"Checkpoint — günlük başlangıç ({today})\n\n"
-            "Bugün ne kadar zamanın var, enerjin nasıl?\n"
-            "Örnek: /gun 40 3\n\n"
-            "Ardından /plan 25 3 ile küçük bir çalışma seçebilirsin.\n"
-            "Bugün çalışmayacaksan /gun 0 3 yazabilirsin."
+            "Günaydın. Bugün her şeyi bitirmeye çalışmadan küçük bir başlangıç seçelim.\n\n"
+            "Ne kadar zaman ayırabilirsin, enerjin nasıl?\n"
+            "/gun 40 3 → 40 dakikam var, enerjim 5 üzerinden 3.\n"
+            "1 çok düşük, 5 yüksek enerji demek.\n\n"
+            "Sonra /plan yaz; açık işlerinden nereden başlayabileceğine bakalım.\n"
+            "Bugün çalışmayacaksan yanıt vermen gerekmiyor."
         ),
     }
 

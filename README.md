@@ -1,357 +1,214 @@
-# Checkpoint — Cognitive-Aware AI Productivity Agent
+# Checkpoint
 
-Checkpoint, kullanıcının zamanını, enerji seviyesini ve görev özelliklerini değerlendirerek en fazla iki aktif görev seçen bir Python terminal uygulamasıdır. İlk seçilen görev **Daily Win** olur. Uygulama, Daily Win için bir LLM yardımıyla somut bir sonraki eylem önerir ve kullanıcının ilerlemesini JSON dosyasında saklar.
+Zamanına ve enerjine göre küçük bir çalışma seçmene, somut bir adım atmana ve kaldığın yeri kaydetmene yardımcı olan Python uygulaması — CLI ve kişisel Telegram botu.
 
-UP School “Time Management with AI” görevi kapsamında, AI/ML engineering temellerini küçük ve çalışan bir proje üzerinde uygulamak için geliştirilmiştir.
+**Python önceliklendirir. İsteğe bağlı LLM bir sonraki adımı önerir. İşi kullanıcı yapar.**
 
-## Problem ve amaç
+## The Problem
 
-Açık görevleri yalnızca bir listede toplamak, hangi işe başlanacağı kararını çözmez. Görevlerin önemi, deadline'ı, tahmini süresi ve gerektirdiği zihinsel çaba farklıdır; kullanıcının zamanı ve enerjisi de günden güne değişebilir.
+Çok sayıda açık işi zihnimde tutmak ve araştırma/bilgi tüketiminde uzun süre kalmak, somut çıktı üretmeye geçmemi zorlaştırabiliyor. Bir görev listesi tutmak, “Şimdi neye başlayayım?” sorusunu tek başına çözmüyor.
 
-Checkpoint, bütün işleri güne sıkıştırmak yerine mevcut koşullara uygun küçük bir odak alanı seçmeye yardımcı olur. Seçilmeyen görevler silinmez. Tamamlanma, her şeyin bitmesi olarak değil, belirli bir eylemin tamamlandığı bir checkpoint olarak ele alınır.
+Checkpoint, bütün işleri güne sıkıştırmak yerine mevcut zaman, enerji, önem ve son tarihlerle küçük bir başlangıç seçmek için geliştirildi. Proje, UP School “Time Management with AI” çalışmasından doğdu.
 
-Enerji ve bilişsel yük kullanıcının kendi değerlendirmesidir. Puanlama katsayıları başlangıç için belirlenmiş ürün kurallarıdır; tıbbi değerlendirme veya bilimsel olarak doğrulanmış verimlilik modeli değildir. Gerçek kullanımda zaman kazancı henüz ölçülmemiştir.
+## Core Idea
 
-## v0.1 nasıl çalışır?
+**Input → prioritization → Daily Win → concrete next action → user action → feedback → checkpoint → next iteration**
 
-1. Kayıtlı görevler yüklenir ve doğrulanır.
-2. Kullanıcı bugünkü kullanılabilir süreyi ve enerjisini girer; yeni görevler ekleyebilir.
-3. Önceden engellenmiş görevler için engelin kalkıp kalkmadığı sorulur.
-4. Python görevleri puanlar; engeli olmayan ve kalan süreye sığan en fazla iki görevi seçer.
-5. İlk seçilen görev Daily Win olur. Puanın bileşenleri ve seçim gerekçesi gösterilir.
-6. Daily Win'in kayıtlı eylemi varsa kullanılır. Yoksa Groq üzerinden yeni bir eylem istenir; tamamlanmış eylemler bağlam olarak gönderilir.
-7. Kullanıcı `done`, `blocked` veya `continue` feedback'i verir. Yeni checkpoint ve güncel durum dosyaya kaydedilir.
+Her planda en fazla iki görev önerilir; ilk öneri **Daily Win** olarak adlandırılır. Kullanıcı diğer görevi de seçebilir. Bir göreve en fazla 15 dakika ayrılır; bütün görevin o sürede bitmesi gerekmez. Bu, gün boyunca değişmeyen iki görev sınırı değildir.
 
-İşi kullanıcı gerçekleştirir. Uygulama dosyaları düzenlemez, e-posta göndermez veya başka uygulamalarda eylem yürütmez.
+## Demo / Example
 
-### Girdiler
-
-| Girdi | Kabul edilen değer |
-| --- | --- |
-| Görev adı | Boş olmayan metin |
-| Önem (`importance`) | 1–5 arasında tam sayı |
-| Tahmini süre | Dakika cinsinden pozitif tam sayı |
-| Bilişsel yük (`cognitive_load`) | `low`, `medium`, `high` |
-| Deadline | `YYYY-MM-DD`; yoksa boş giriş |
-| Bugünkü kullanılabilir süre | Dakika cinsinden pozitif tam sayı |
-| Mevcut enerji | 1–5 arasında tam sayı |
-
-### Öncelik ve seçim kuralları
+Aşağıdaki yapay örnek gerçek kullanıcı etkisi veya canlı model yanıtı değildir. Elle eylem seçildiği için API gerektirmez. Telegram’da her satır ayrı mesajdır:
 
 ```text
-Puan = önem × 2 + deadline katkısı − enerji uyumsuzluğu kesintisi
+/gun 40 3
+/ekle CV güncelle | 4 | 60 | medium | - | Başvuruya hazır CV | Projeler bölümünü henüz yazmadım
+/plan
 ```
 
-| Koşul | Etki |
-| --- | ---: |
-| Deadline bugün veya geçmiş | +4 |
-| Deadline yarın | +3 |
-| Deadline 2–3 gün içinde | +1 |
-| Deadline yok veya daha uzakta | +0 |
-| Enerji 1–2, yük `high` | −3 |
-| Enerji 1–2, yük `medium` | −1 |
-| Diğer enerji–yük durumları | 0 |
+Botun planından:
 
-Görevler yüksek puandan düşük puana sıralanır. Eşit puanlarda mevcut liste sırası korunur. Engelli veya kalan süreye sığmayan görev atlanır; iki görev seçilince durulur. Bu greedy yöntem toplam puanı matematiksel olarak en yüksek görev kombinasyonunu garanti etmez.
+```text
+1. Önce bunu öneriyorum (Daily Win): CV güncelle
+Bu işe şimdi 15 dakika ayıralım; tamamını bitirmen gerekmiyor.
+Senin verdiğin önem: 4/5.
+```
 
-### Feedback ve checkpoint
+```text
+/sec 1 elle
+/eylem CV'nin projeler bölümüne Checkpoint'i anlatan bir madde yaz.
+```
 
-| Feedback | Durum değişikliği |
-| --- | --- |
-| `continue` | Mevcut eylem korunur; geçmişe yeni kayıt eklenir. |
-| `done` | Eylem geçmişte korunur, `next_action` temizlenir. Ana görev silinmez. |
-| `blocked` | Boş olmayan engel açıklaması alınır; eylem korunur ve görev engelli olarak işaretlenir. |
+Kullanıcı gerçekten çalıştıktan sonra:
 
-Sonraki çalıştırmada engelin kalktığı belirtilirse görev yeniden seçilebilir. Güncel engel durumu değişse de geçmiş checkpoint'ler korunur. `version`, görev başına feedback kaydının sıra numarasıdır; her sürüm farklı bir eylem olmak zorunda değildir.
+```text
+/kaydet tamam 10 | Projeler bölümüne bir madde ekledim.
+/ozet
+```
 
-## Mimari ve mühendislik kararları
+Sonuç: bir checkpoint oluşur, kalan süre 40 → 30 dakika olur, tamamlanan eylem geçmişte korunur ve mevcut eylem temizlenir. Ana görev açık kalır; tamamı bittiyse ayrıca `/tamamla kimlik` kullanılır.
+
+## How It Works
+
+1. JSON kaydı okunur; geçersiz kayıt üzerine boş veri yazılmaz.
+2. Kullanıcı zamanını, enerjisini ve görevlerini belirtir.
+3. Python açık, engeli olmayan görevleri puanlar; en fazla ikisine kısa çalışma süresi ayırır.
+4. Kullanıcı bir görev seçer. Kayıtlı eylem, elle yazılan eylem veya LLM önerisi kullanılır.
+5. Kullanıcı çalışır; **tamam / devam / engel** ve harcadığı dakikayı bildirir.
+6. Checkpoint, görev durumu ve kalan süre birlikte kaydedilir.
+
+**Puan:** önem × 2 + deadline katkısı − düşük enerjiyle yük uyumsuzluğu.
+
+Deadline bugün/geçmişse +4, yarınsa +3, 2–3 gün içindeyse +1; diğer durumlarda +0. Enerji 1–2 olduğunda orta yük −1, yüksek yük −3; diğer durumlarda kesinti yok. Eşit puanlarda liste sırası korunur. Bunlar açıklanabilir ürün kurallarıdır; öğrenilmiş veya bilimsel olarak doğrulanmış katsayılar değildir.
+
+**Ayrılan dakika:** `min(görevin toplam tahmini, kalan dakika, 15)`. Uzun görevler sırf toplam süreleri büyük diye elenmez. Seçim toplam faydayı matematiksel olarak en yüksek yapan kombinasyonu garanti etmez.
+
+## Architecture
 
 ```mermaid
 flowchart TD
-    U[Kullanıcı: CLI girdileri] --> P[Python: doğrulama ve öncelik hesabı]
-    S[(state.json)] --> P
-    P --> W[Python: süre kontrolü, en fazla iki görev, Daily Win]
-    W --> K{Kayıtlı eylem var mı?}
-    K -->|Evet| A[Eylemi kullanıcıya göster]
-    K -->|Hayır| L[llm.py: Groq API]
-    L --> A
-    A --> F[Kullanıcı: eylem ve feedback]
-    F --> C[Python: checkpoint ve durum güncelleme]
-    C --> S
-    W --> S
+    U[Kullanıcı: CLI veya Telegram] -->|Görev, önem, tarih, yük, zaman, enerji| P[planning.py: Python kuralları]
+    S[(state.json)] -->|storage.py: görevler, günlük durum, geçmiş| P
+    P -->|En fazla iki görev ve ayrılan dakikalar| W[Daily Win önerisi ve kullanıcı seçimi]
+    W -->|Başlık, hedef, bağlam, dakika, enerji, tamamlanan eylemler| L[llm.py: isteğe bağlı Groq çağrısı]
+    L -->|Tek bir eylem önerisi| A[Kullanıcı adımı değerlendirir]
+    W -->|Kayıtlı veya elle yazılan adım| A
+    A -->|Seçilen somut adım| H[Kullanıcı çalışır]
+    H -->|Durum, harcanan dakika, çıktı veya engel| C[workflow.py: checkpoint ve durum değişikliği]
+    C -->|storage.py: geçmiş ve kalan süre| S
+    T[Telegram mesaj işleme] -->|Mesaj konumu, bekleyen çalışma ve yanıt| S
 ```
 
-| Karar | Gerekçe ve karşılığı |
-| --- | --- |
-| Seçim ve kayıt Python ile yapılır | Kurallar incelenebilir ve aynı girdilerle tekrar üretilebilir. Ağırlıkların uygunluğu yine değerlendirme gerektirir. |
-| LLM yalnızca sonraki eylemi üretir | Belirsiz görevleri yorumlamak için kullanılır. Görev puanlarını ve seçimi değiştirmez. Plan gerekçeleri mevcut sürümde Python tarafından gösterilir. |
-| LLM bağlantısı ayrı modüldedir | Sağlayıcı değişikliği görev seçme ve kayıt kodundan ayrılır. Ek framework kullanılmaz. |
-| Görevler kalıcı UUID ile tanınır | Başlık değişiklikleri ve aynı başlıktaki görevler kimliği bozmaz. |
-| JSON kullanılır | Tek kullanıcılı CLI için okunabilir ve kurulumu kolaydır; eşzamanlı yazma için uygun değildir. |
-| Önce geçici dosyaya yazılır | Yazma tamamlanınca `state.tmp`, `state.json` yerine geçirilir. Yarım yazma riski azalır; bu yöntem yedekleme değildir. |
-| API çağrısından önce plan kaydedilir | API hatası, o noktaya kadar kaydedilmiş görevleri kaybettirmez. |
+`tasks` görevleri ve checkpoint’leri, `day` günlük durumu tutar. `selection` CLI’ın son planıdır; `telegram.session` botun bekleyen çalışmasıdır. Bunlar iki arayüz arasında canlı olarak eşitlenen planlar değildir. **CLI ve bot aynı anda çalıştırılmamalıdır.**
 
-### Teknolojiler
+Checkpoint bir çalışma bildirimi kaydıdır; bütün dosyanın geri alınabilir kopyası değildir. `version`, görev başına kayıt sıra numarasıdır.
 
-- Python; standart kütüphaneden `json`, `pathlib`, `datetime`, `uuid`
-- OpenAI Python SDK: `openai==3.17.0`
-- LLM sağlayıcısı: **Groq**; model: `openai/gpt-oss-20b`
-- Yerel JSON kalıcılığı ve Git
+## Why not let the LLM decide everything?
 
-İlk OpenAI API denemesi kredi eksikliği nedeniyle başarısız olmuştur. Ücretsiz kullanım tercihiyle Groq'a geçilmiştir. OpenAI SDK kullanılması, isteğin OpenAI API'ye gittiği anlamına gelmez: bağlantı adresi Groq'a ayarlanmıştır. Ücretsiz erişim ve kotalar sağlayıcı hesabına bağlıdır.
+Öncelik, süre ve kayıt kurallarının aynı girdilerle açıklanabilir ve test edilebilir olmasını istiyorum. Bu nedenle model görev seçmez, süre düşmez ve görev tamamlamaz.
 
-## Dosya yapısı
+LLM, belirsiz bir görev ifadesini küçük bir eyleme çevirmek için kullanılır. Başlık, hedef, güncel bağlam, ayrılan dakika, enerji ve tamamlanmış eylem metinleri Groq’a gönderilir. Telegram mesajları ayrıca Telegram üzerinden geçer.
 
-```text
-checkpoint/
-├── main.py           # CLI, doğrulama, seçim, feedback ve kayıt
-├── llm.py            # Sonraki eylem üretimi ve bağımsız API denemesi
-├── requirements.txt  # Doğrudan harici bağımlılık
-├── .gitignore
-├── README.md
-└── state.json        # Çalışma sırasında oluşur; Git dışında tutulur
-```
+Model yanıtının tamamlanmış ve boş olmayan metin olduğu kontrol edilir; yararlı, doğru veya süreye uygun olduğu otomatik kanıtlanmaz. Kullanıcı öneriyi değiştirebilir. API çalışmazsa elle devam edebilir. Telegram’da `/sec 1 elle` API çağırmaz; CLI’da AI yalnızca kullanıcı yeni öneri istediğinde çağrılır.
 
-`.venv/`, `__pycache__/`, `.env`, `state.json` ve `state.tmp` Git dışında tutulur. API anahtarı kaynak kodda veya görev kaydında saklanmaz.
+Bu bir otonom araç kullanan agent değildir; **LLM destekli, kurallarla çalışan bir productivity system**dir.
 
-## Kurulum ve çalıştırma — Windows / PowerShell
+## Design Decisions
 
-Geliştirme ve manuel denemeler Windows 11 Pro, Python 3.14.7 ve OpenAI SDK 3.17.0 ile yapılmıştır. Başka Python sürümleri için test edilmiş uyumluluk iddiası yoktur.
+| Decision | Reason | Trade-off |
+| --- | --- | --- |
+| CLI + kişisel Telegram | CLI akışı görünür kılar; Telegram günlük erişimi kolaylaştırır | İki arayüzün bakımı ve botun açık kalması gerekir |
+| JSON | Tek kullanıcı için okunabilir, kurulumsuz kayıt | Tek süreç varsayımı; veritabanı ve yedekleme özellikleri yok |
+| En fazla iki öneri | Bir anda ele alınacak seçenekleri sınırlamak | Gün boyu sabit WIP sınırı değil |
+| En fazla 15 dakikalık başlangıç | Büyük göreve küçük bir giriş sunmak | Derin çalışma için kısa kalabilir |
+| Python ile öncelik | İncelenebilir gerekçeler ve deterministik testler | Kurallar kişiye göre otomatik öğrenilmez |
+| LLM yalnızca eylem önerir | Belirsiz metni yorumlarken karar sınırını korumak | Öneri kalitesi değişken; insan kontrolü gerekir |
+| Geçici dosya + replace | Eksik yazılmış JSON riskini azaltmak | Güç kesintisi garantisi veya yedekleme değil |
+| Telegram işlem konumunu kayıtla birlikte saklama | Aynı gelen mesajın işlemi tekrar uygulamasını önlemek | Bağlantı belirsizliğinde gönderilen yanıt tekrarlanabilir |
 
-### 1. Python ortamını oluştur
+## Personal Design Hypothesis
 
-Projeyi indirdikten sonra `main.py` dosyasının bulunduğu klasörde PowerShell aç:
+**Personal observation:** Araştırma ve bilgi tüketiminde uzun süre kalıp somut çıktı üretmeye geçmekte zorlandığımı gözlemledim.
+
+**Personal hypothesis:** Küçük bir eylem seçmenin, onu yapmanın, sonucu görünür biçimde kaydetmenin ve bunu tekrarlamanın benim için üretmeye geçişi kolaylaştırıp kolaylaştırmadığını incelemek istiyorum. Görünür ilerleme ve küçük sözleri tutmanın kendi yapabilme algımla nasıl ilişkili olduğunu da gözlemlemek istiyorum.
+
+**Established evidence:** Bu repository bu etkinin gerçekleştiğine dair bilimsel kanıt sunmaz. Enerji ve dikkat ihtiyacı kullanıcı beyanıdır; öz yeterlilik doğrudan ölçülmez. Çalışan yazılım ve geçen testler, davranışsal etkinlik kanıtı değildir.
+
+Gözlem → hipotez → küçük yazılım tasarımı → eylem/çıktı kaydı → kişisel değerlendirme. **Bu bir kişisel tasarım hipotezidir; klinik veya nörobilimsel iddia değildir.**
+
+## What I Tested
+
+Standart kütüphanenin `unittest` modülüyle API kullanmadan:
+
+- Deadline/enerji puanı, eşitlik sırası, süre paylaşımı ve iki görev sınırı.
+- Engelli, tamamlanmış ve arşivlenmiş görevlerin dışlanması.
+- Feedback geçişleri, ikinci göreve kayıt ve aynı mesajın tekrar teslimi.
+- JSON kaydet–yükle, bozuk kayıt, yazma hatasında önceki verinin korunması.
+- CLI’da tamamla/geç/düzenle; aynı gün kalan süre ve botun bekleyen çalışmasının korunması.
+- AI olmadan devam, boş/eksik model yanıtı, Telegram gönderim hataları ve uzun mesajlar.
+- Hatırlatmanın bir kez hazırlanması ve çalışma kaydı oluşturmaması.
+
+Testler geçici dosyalarda sentetik veri kullanır; kişisel `state.json` değiştirilmez. Canlı API entegrasyonu, önerilerin yararlılığı ve gerçek kullanıcı etkisi bu testlerle doğrulanmaz.
+
+## Limitations
+
+- Tek kullanıcı, tek süreç, yerel bilgisayar. Bot ve hatırlatma için bilgisayar uyanık, internet ve bot açık olmalı.
+- Zaman, enerji, tamamlanma ve çıktı açıklamaları kullanıcı beyanı; süre ölçer veya bağımsız çıktı doğrulaması yok.
+- 15 dakika sınırı, iki öneri ve öncelik katsayıları değerlendirilmeyi bekleyen tasarım tercihleri.
+- Hedef/bağlam düzenlenince eski eylem temizlenir; yalnızca enerji veya dakika değişince kayıtlı eylem otomatik uyarlanmaz.
+- LLM’e gönderilen geçmiş büyüyebilir; açık çıktı-token sınırı ve semantik kalite ölçümü yok.
+- Yeni plan/görev/günlük ayar bekleyen bot seçimini temizler. Önce mevcut çalışmayı kaydet. Geçersiz veya sıfır dakikalık plan isteği eski seçimi korur.
+- Geçici gönderim hatasında yanıt saklanır. Kalıcı HTTP 400/403 hatasında terminale bilgi verilir ve o yanıt bırakılır; iş kayıtları korunur. Anahtar/çakışma hatasında bot durur.
+- Uzun bot mesajları kısaltılır. Tam görev ve checkpoint metinleri kayıtta kalır.
+- Gerçek üretkenlik artışı veya uzun süreli etkinlik henüz gösterilmedi.
+
+## What I Learned
+
+Bu kodun ortaya koyduğu mühendislik dersleri: dış API çalışmasa da kullanıcı akışını sürdürebilmek; aynı kuralı iki arayüzde tekrar yazmanın davranış farkına yol açması; dosyaya yazmayı güvenli yapmakla yedeklemenin farklı olması; test edilen yazılım davranışı ile ürünün insana faydasını ayrı değerlendirmek.
+
+## Future Work
+
+Önce gerçek görevlerle kısa kişisel kullanım, ardından gözlenen sürtünmeye göre daha kolay görev girişi ve bağlam güncelleme. Yeni framework veya çok kullanıcılı altyapı öncelik değil. [Eleştiri, değerlendirme planı ve sürüm backlog’u](BACKLOG.md).
+
+## Run Locally
+
+Yerel doğrulama ortamı: Windows, Python 3.14. Diğer platformlarda çalıştırıldığı iddia edilmez. OpenAI SDK, Groq’un uyumlu API adresine bağlanır; istek OpenAI’ye gönderilmez.
+
+### 1. İndir ve kur
+
+PowerShell’de:
 
 ```powershell
+git clone https://github.com/gullcan/checkpoint.git
+cd checkpoint
 py -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
-Komutlar proje ortamının Python'ını doğrudan kullandığı için ortamı ayrıca aktive etmek gerekmez. SDK sürümü sabittir; alt bağımlılıkların tamamı kilitlenmemiştir.
-
-### 2. Groq anahtarını tanımla
-
-1. [Groq Console](https://console.groq.com/) hesabında ücretsiz katmanı kullanarak [API anahtarı](https://console.groq.com/keys) oluştur.
-2. Windows'ta **Hesabınız için ortam değişkenlerini düzenleyin** ekranını aç.
-3. Kullanıcı değişkenlerine `GROQ_API_KEY` ekle; değerine anahtarı tırnaksız yapıştır.
-4. VS Code ve terminali kapatıp yeniden aç.
-
-Anahtarı göstermeden ortamda bulunduğunu kontrol et:
-
-```powershell
-.\.venv\Scripts\python.exe -c "import os; print(bool(os.environ.get('GROQ_API_KEY')))"
-```
-
-`True`, yalnızca boş olmayan bir değerin bulunduğunu gösterir; erişim veya kota testi değildir. Anahtarı Git'e, ekran görüntülerine veya paylaşılan çıktılara ekleme.
-
-### 3. Uygulamayı başlat
+### 2. CLI ile başla
 
 ```powershell
 .\.venv\Scripts\python.exe main.py
 ```
 
-- Günlük süre ve enerjiyi gir.
-- Görev eklemek için Enter'a bas; görev girişini bitirmek için `q` yaz.
-- Deadline yoksa Enter'a bas.
-- Engelli görev sorusunda `e` engelin kalktığını, `h` devam ettiğini belirtir.
-- Daily Win eylemi için `done`, `blocked` veya `continue` gir.
+Anahtar olmadan elle eylem girebilirsin. AI önerileri için Windows **Hesabınız için ortam değişkenlerini düzenleyin** ekranında `GROQ_API_KEY` tanımla, sonra terminali yeniden aç. Anahtarı [Groq Console](https://console.groq.com/keys) üzerinden alabilirsin; erişim ve kotalar hesabına bağlıdır.
 
-Yeni eylem üretildiğinde görev başlığı, göreve ayrılan süre, enerji ve tamamlanmış eylem metinleri Groq'a gönderilir. Kayıtlı eylem kullanılıyorsa veya aktif görev yoksa yeni model çağrısı yapılmaz.
+Uygulama `.env` dosyasını otomatik okumaz. Anahtarları koda, Git’e veya ekran görüntüsüne ekleme.
 
-İsteğe bağlı bağımsız LLM denemesi:
+### 3. Telegram’ı isteğe bağlı kur
+
+1. Telegram’da BotFather ile bot oluştur. Token’ı Windows kullanıcı ortam değişkeni `TELEGRAM_BOT_TOKEN` olarak kaydet; terminali yeniden aç.
+2. Bot çalışmıyorken `.\.venv\Scripts\python.exe telegram_setup.py` çalıştır. Gösterilen eşleştirme mesajını kendi botuna gönder.
+3. Bulunan sayısal kimliğini `TELEGRAM_ALLOWED_USER_ID` ortam değişkenine kaydet; terminali yeniden aç.
+4. `start_bot.cmd` dosyasını aç veya aşağıdaki komutu çalıştır:
 
 ```powershell
-.\.venv\Scripts\python.exe llm.py
+.\.venv\Scripts\python.exe telegram_bot.py
 ```
 
-Bu komut dosyadaki örnek görevle gerçek API isteği gönderir; `state.json` dosyasını değiştirmez. İstek ücretsiz kotayı kullanır; yanıt değişken olabilir.
-
-## Veri ve hata davranışı
-
-`state.json`, terminalin çalışma konumundan bağımsız olarak `main.py` yanında tutulur:
-
-- `tasks`: Bütün görevler, kalıcı kimlikler, varsa eylem, engel durumu ve checkpoint geçmişi.
-- `day`: Son çalıştırmada girilen tarih, süre ve enerji.
-- `selection`: Son hesaplanan planın aktif görev kimlikleri ve Daily Win kimliği.
-
-Her açılışta günlük bağlam yeniden alınır ve plan yeniden hesaplanır. Görev geçmişi korunur. `selection`, feedback sonrasında otomatik yeniden planlanan canlı bir liste değil, son planın kaydıdır.
-
-Dosya yoksa boş başlangıç yapılır. Geçersiz JSON veya doğrulamadan geçmeyen görev kaydı tespit edilirse uygulama üzerine boş state yazmadan durur. Görev alanları, kimliklerin benzersizliği ve checkpoint yapısı kontrol edilir; `day` ve `selection` için tam şema/ilişki doğrulaması uygulanmaz.
-
-API ve yanıt kontrolü hataları kullanıcıya gösterilir. Eksik anahtar, bağlantı, kota veya model erişimi sorunları eylem üretimini engelleyebilir. Önceden kaydedilmiş görevler korunur. İstemci 20 saniyelik ağ zaman aşımı ayarıyla ve otomatik yeniden deneme kapalı olarak oluşturulur.
-
-## Manuel kabul senaryoları
-
-Aşağıdaki davranışlar geliştirme sırasında terminal çıktıları ve JSON kayıtları incelenerek doğrulanmıştır. Bunlar otomatik testler veya CI sonuçları değildir. Örnek görevlerin feedback kayıtları, gerçek hayatta iş tamamlandığına dair kanıt olarak değerlendirilmemiştir.
-
-| Senaryo | Deneme | Beklenen ve gözlemlenen sonuç |
-| --- | --- | --- |
-| Süre ve WIP sınırı | 25 dakika; deadline'sız, düşük yüklü dört görev: önem/süre çiftleri 5/60, 3/10, 2/5, 1/5 | 60 dakikalık görev atlandı. 10 ve 5 dakikalık iki görev seçildi. Kalan süreye rağmen üçüncü görev seçilmedi; dört kayıt korundu. |
-| Uygun görev yok | Yalnızca 60 ve 10 dakikalık görevler varken 5 dakika bütçe | Aktif liste boş, Daily Win `null`; API ve feedback aşaması çalışmadı. |
-| Devam etme | Kayıtlı eyleme `continue` verip yeniden açma | Aynı eylem gösterildi; yeni üretim yapılmadı ve checkpoint geçmişi büyüdü. |
-| Eylemi tamamlama | Kayıtlı eyleme `done` verme | Eylem checkpoint'te korundu, `next_action` `null` oldu; ana görev silinmedi. |
-| Engel ve geri alma | `blocked` ve engel açıklaması; sonraki açılışta önce `h`, sonra `e` | Engel devam ederken görev seçilmedi; kaldırılınca aynı görev ve kayıtlı eylem yeniden kullanılabildi. |
-
-Ek kontrollerde boş başlık, geçersiz önem/süre/enerji/tarih ve JSON'da yanlış türde `importance` veya `blocked` değerlerinin reddedildiği gözlemlenmiştir. Geçici dosyanın başarılı kayıttan sonra kalmadığı kontrol edilmiştir; disk arızası ve güç kesintisi simülasyonu yapılmamıştır.
-
-## Bilinen sınırlamalar
-
-- Eylem üretme ve feedback döngüsü yalnızca Daily Win içindir. İkinci aktif görev planlamada yer alır.
-- Önerinin küçük, yararlı, tekrarsız veya süreye uygun olması garanti edilmez. Tamamlanmış eylemler bağlama eklenir, ancak semantik tekrar otomatik doğrulanmaz.
-- Mevcut LLM isteğinde açık bir çıktı-token üst sınırı belirtilmemiştir. Sağlayıcı varsayımları ve hesap kotaları geçerlidir.
-- Süreler kullanıcı tahminidir; gerçek geçen süre ölçülmez. Günlük süreye gerçekçi üst sınır kontrolü uygulanmaz ve uygulamanın yeniden açılması kalan süreyi otomatik hesaplamaz.
-- Tamamlanan eylem ana görevi kapatmaz. CLI'da ana görev kapatma, düzenleme veya silme işlemi yoktur.
-- Yeni süre/enerjiyle tekrar Daily Win seçilen görevin kayıtlı eylemi yeniden değerlendirilmeden kullanılır. Görev her zaman aynı gün tekrar seçilebilir.
-- JSON eşzamanlı kullanım, çok kullanıcılı erişim veya otomatik yedekleme sağlamaz. Tek uygulama süreci varsayılır.
-- Gerçek kullanıcı verimliliğine etkisi ölçülmemiştir. Manuel örnekler başarı oranı veya zaman kazancı iddiası için yeterli değildir.
-
-## Referanslar
-
-- [Groq — OpenAI SDK uyumluluğu](https://console.groq.com/docs/openai)
-- [Groq — Responses API](https://console.groq.com/docs/responses-api)
-- [Groq — kullanım sınırları](https://console.groq.com/docs/rate-limits)
-- [Python — JSON](https://docs.python.org/3/library/json.html)
-
-Yeni özellik fikirleri v0.1 davranışıyla karıştırılmadan ayrı bir `BACKLOG.md` dosyasında tutulabilir.
-
-
-
-
-## v0.2 — Günlük kullanım için CLI
-
-Checkpoint, görevlerin toplam tahmini süresi ile mevcut oturumda ayrılacak çalışma süresini ayrı değerlendirir. Öncelik sırasına göre en fazla iki aktif görev seçer; ilkini Daily Win olarak önerir. Kullanıcı bu iki görevden hangisinde çalışacağını seçebilir.
-
-### Eklenen özellikler
-
-- Görev başına varsayılan olarak en fazla 15 dakikalık çalışma süresi ayırma.
-- Hedef sonuç ve mevcut görev bağlamını kaydetme ve düzenleme.
-- Kullanıcı istediğinde AI önerisi alma; öneriyi kabul etme, elle değiştirme veya oturumu geçme.
-- Tamamlanan adım için somut çıktı açıklaması kaydetme.
-- Gerçekte harcanan süreyi kullanıcıdan alıp günlük kalan zamanı güncelleme.
-- Aynı gün yeniden açıldığında kalan zamanı koruma.
-- Görevleri arşivleme ve arşivden geri alma.
-- Bir adımın tamamlanması ile ana görevin tamamlanmasını ayrı kaydetme.
-- Tamamlanmış ve arşivlenmiş görevleri sonraki seçimlerden çıkarma.
-- Günlük tamamlandı, devam ve engel bildirimlerini; çıktı açıklamalarını ve kaydedilmiş süreyi gösterme.
-
-### Doğrulanan davranışlar
-
-- İkinci aktif görev seçildiğinde checkpoint doğru göreve yazılır.
-- Oturum geçildiğinde yeni checkpoint oluşmaz ve süre düşmez.
-- Kalan süre uygulama yeniden açıldığında korunur.
-- Arşivlenen görev geri alınabilir.
-- Tamamlanan ana görev, kullanılabilir süre olsa bile yeniden seçilmez.
-- Eski checkpoint’lerde eksik süre bilgisi günlük özette ayrıca belirtilir.
-
-### Bilinen sınırlar
-
-AI önerileri ilgisiz olabilir veya belirtilmemiş dosya adları üretebilir; kullanıcı tarafından değerlendirilmelidir. Elle eylem girme seçeneği bulunur.
-
-Çalışma süresi ve tamamlanma bilgisi kullanıcının beyanına dayanır. Checkpoint sayısı, doğrulanmış çıktı sayısı anlamına gelmez.
-
-Görev bağlamı otomatik güncellenmez. Günlük zaman takibi, kaydedilen çalışma sürelerini ve kullanıcının düzeltmelerini esas alır.
-
-Bu sürüm terminalde çalışır; Telegram bağlantısı ve otomatik hatırlatıcı içermez.
-
-
-
-## v0.3 — Kişisel Telegram botu
-
-Checkpoint, Telegram üzerinden günlük zaman ve enerji girişi, görev ekleme, plan önizlemesi, eylem seçimi ve checkpoint kaydı sunar. Yalnızca yapılandırılmış kullanıcının özel sohbet mesajlarını işler.
-
-### Başlatma
-
-CLI ile botu aynı anda çalıştırmayın. Aynı JSON dosyasını kullanırlar.
-
-Botun çalıştırıldığı terminalde şu ortam değişkenleri bulunmalıdır:
-
-- `TELEGRAM_BOT_TOKEN`: BotFather’dan alınan bot token’ı.
-- `TELEGRAM_ALLOWED_USER_ID`: İzin verilen hesabın sayısal Telegram kullanıcı kimliği.
-- `GROQ_API_KEY`: AI eylem önerileri için kullanılan API anahtarı.
-
-Botu `python telegram_bot.py` ile başlatın. Telegram’da `/yardim` yazarak komutları görün. Durdurmak için terminalde Ctrl+C kullanın.
-
-Anahtarları kaynak koda veya GitHub’a eklemeyin.
-
-### Temel kullanım
-
-Her komutu ayrı mesaj olarak gönderin.
-
-1. `/gun 40 3` — Kalan süreyi 40 dakika, enerjiyi 3 olarak ayarla.
-2. `/plan 25 3` — Bu koşullarla plan önizlemesi oluştur.
-3. `/sec 1` — İlk görevi seç ve eylemini gör.
-4. `/eylem ...` — Gerekirse kendi somut eylemini yaz.
-5. `/kaydet continue 5` — Beş dakikalık çalışmayı kaydet.
-6. `/kaydet done 10 | Ürettiğim çıktı` — Tamamlanan adımı ve çıktıyı kaydet.
-7. `/ozet` — Bugünkü bildirimleri, çıktıları ve kaydedilmiş süreyi gör.
-
-Her çalışma kaydından sonra yeni çalışma için yeniden plan oluşturulur.
-
-`/gun` mevcut süreye ekleme yapmaz; kalan süreyi belirtilen değere ayarlar. `/plan` önizlemesi günlük bütçeyi değiştirmez. `done`, çalışma adımının tamamlanmasıdır; ana görev ayrıca `/tamamla kimlik` ile kapatılır.
-
-### Görev yönetimi
-
-- `/bugun`: Kalan süre, enerji ve açık görevler.
-- `/gorevler`: Görev kimlikleri ve durumları.
-- `/ekle görev | önem | dakika | yük | deadline | hedef | bağlam`: Görev ekle.
-- `/duzenle kimlik | hedef | bağlam`: Hedefi ve bağlamı güncelle; değişmeyecek alan için `-` kullan.
-- `/arsiv kimlik`: Görevi silmeden seçimden çıkar.
-- `/ac kimlik`: Görevi yeniden aç ve engel durumunu kaldır.
-- `/tamamla kimlik`: Ana görevi tamamlandı olarak işaretle.
-- `/devam`: Saklanan planı ve bekleyen eylemi göster.
-
-### Kayıt ve yeniden başlatma
-
-Bekleyen plan, eylem ve işlenen Telegram mesajının konumu `state.json` içinde saklanır. Aynı gün bot yeniden başlatıldığında `/devam` ile çalışma görüntülenebilir.
-
-Görev değişiklikleri ve mesajın işlenme konumu birlikte kaydedilir. Aynı Telegram mesajının yeniden teslim edilmesi, aynı işlemin tekrar uygulanmasına yol açmaz. Yanıt gönderimindeki bağlantı belirsizliklerinde yanıt mesajı tekrar görünebilir.
-
-### Bilinen sınırlar
-
-- Bilgisayar ve bot programı çalışırken kullanılabilir; sürekli barındırma ve otomatik hatırlatıcı henüz yoktur.
-- Aynı anda tek bot süreci çalıştırılmalıdır.
-- AI önerileri yanlış veya ilgisiz olabilir; kullanıcı değerlendirmesi gerekir.
-- Telegram’daki yeni AI önerisi başarısız olursa görev seçimi tamamlanamayabilir; bu akış geliştirilecektir.
-- Süre ve tamamlanma bilgileri kullanıcı beyanıdır.
-- Günlük özette teknik test kayıtları da yer alabilir.
-- Uzun listeler ve açıklamalar mesajda kısaltılabilir; kayıt dosyasındaki veriler korunur.
-
-
-
-## v1.0 — Yerel kişisel kullanım
-
-Checkpoint, bilgisayarda çalışan Python uygulaması ve kişisel Telegram botu üzerinden kullanılabilir. Sunucu kurulumu gerektirmez. Telegram erişimi ve hatırlatıcılar için bilgisayarın uyanık, internete bağlı ve botun çalışıyor olması gerekir.
-
-### Başlatma ve günlük akış
-
-`start_bot.cmd` dosyasına çift tıklayarak botu başlatın. Aynı anda yalnızca bir bot çalıştırın; CLI ile botu eşzamanlı kullanmayın.
-
-Telegram komutlarını ayrı mesajlar halinde gönderin:
-
-1. `/gun 40 3` — Mevcut kalan süre ve enerjiyi belirle.
-2. `/plan 25 3` — Plan önizlemesi al.
-3. `/sec 1` — Görev seç ve varsa eylem önerisini gör.
-4. `/eylem ...` — Gerektiğinde kendi somut eylemini yaz.
-5. Gerçek çalışmanın ardından `/kaydet` ile durumunu ve harcadığın süreyi bildir.
-6. `/ozet` ile günlük kayıtlarını incele.
-
-`/yardim` tüm komutları, `/devam` saklanan planı ve bekleyen eylemi gösterir.
-
-### AI olmadan devam etme
-
-`/sec 1 elle` komutu API çağırmadan görev seçer. Ardından `/eylem` ile çalışma adımı yazılabilir.
-
-AI önerisi alınamadığında görev seçimi korunur. Eylem belirlenmeden checkpoint kaydı yapılamaz. AI önerileri kullanıcı tarafından değerlendirilmeli; yanlış veya ilgisiz öneriler değiştirilebilir.
-
-### Günlük hatırlatıcı
-
-- `/hatirlat 09:00`: Bilgisayarın yerel saatine göre günlük başlangıç hatırlatıcısı.
-- `/hatirlat kapat`: Hatırlatıcıyı kapatır.
-
-Hatırlatma, çalışma kaydı oluşturmaz ve süre düşmez. Planlanan saatten bir saatten fazla sonra başlatılan bot o gün için yeni bir hatırlatma hazırlamaz. Önceden kuyruğa alınan mesajların teslimi bağlantıya bağlı olarak gecikebilir.
-
-### Kullanımın değerlendirilmesi
-
-Çıktı açıklamaları, çalışma süreleri ve tamamlanma bilgileri kullanıcı beyanına dayanır. Teknik test kayıtları günlük özetlerde bulunabilir.
-
-Projenin kişisel hipotezi; küçük ve uygulanabilir adımlar seçmenin, somut sonuçları kaydetmenin ve ilerlemeyi görmenin üretmeye geçişi kolaylaştırabileceğidir. Uygulamanın çalışması, bu etkinin gerçekleştiğini tek başına göstermez; fayda gerçek kullanım deneyimleri üzerinden değerlendirilecektir.
+Botuna `/start` gönder. Görev ekleme örneği için `/ekle`, tüm komutlar için `/yardim`. Durdurmak için terminalde Ctrl+C. Aynı anda ikinci bir bot veya CLI çalıştırma.
+
+`/gun 40 3` kalan zamanı 40 yapar; mevcut zamana 40 eklemez. `/plan` kayıtlı zamanı/enerjiyi kullanır; `/plan 25 3` yalnızca o seçim için farklı koşul belirtir. Eski `done/continue/blocked` ifadeleri de kabul edilir.
+
+### 4. Testleri çalıştır
+
+```powershell
+.\.venv\Scripts\python.exe -B -m unittest discover -s tests -v
+```
+
+## Project Structure
+
+| Dosya | Sorumluluk |
+| --- | --- |
+| `main.py` | CLI girdileri ve çalışma akışını yönetir |
+| `planning.py` | Puan, uygun görev seçimi ve kısa çalışma sürelerini hesaplar |
+| `workflow.py` | Checkpoint, bağlam değişikliği ve günlük özet kurallarını uygular |
+| `storage.py` | JSON doğrulama, okuma/yazma ve botun kayıtlı oturumunu kontrol eder |
+| `llm.py` | Groq üzerinden eylem önerisi ister ve yanıtın temel biçimini kontrol eder |
+| `telegram_bot.py` | Telegram komutlarını ve mesaj teslimini yönetir |
+| `reminders.py` | Günlük hatırlatma metnini uygun saatte hazırlar |
+| `telegram_setup.py` / `start_bot.cmd` | Telegram eşleştirmesi / Windows başlatıcısı |
+| `tests/test_core.py` | API gerektirmeyen davranış testleri |
+| `state.json` | Çalışma sırasında oluşan özel veri; Git dışında |
+
+Kişisel veri, yerel yedekler, `.venv` ve API anahtarları repository’ye dahil edilmez.
