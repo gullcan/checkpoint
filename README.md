@@ -315,3 +315,43 @@ Görev değişiklikleri ve mesajın işlenme konumu birlikte kaydedilir. Aynı T
 - Süre ve tamamlanma bilgileri kullanıcı beyanıdır.
 - Günlük özette teknik test kayıtları da yer alabilir.
 - Uzun listeler ve açıklamalar mesajda kısaltılabilir; kayıt dosyasındaki veriler korunur.
+
+
+
+## v1.0 — Yerel kişisel kullanım
+
+Checkpoint, bilgisayarda çalışan Python uygulaması ve kişisel Telegram botu üzerinden kullanılabilir. Sunucu kurulumu gerektirmez. Telegram erişimi ve hatırlatıcılar için bilgisayarın uyanık, internete bağlı ve botun çalışıyor olması gerekir.
+
+### Başlatma ve günlük akış
+
+`start_bot.cmd` dosyasına çift tıklayarak botu başlatın. Aynı anda yalnızca bir bot çalıştırın; CLI ile botu eşzamanlı kullanmayın.
+
+Telegram komutlarını ayrı mesajlar halinde gönderin:
+
+1. `/gun 40 3` — Mevcut kalan süre ve enerjiyi belirle.
+2. `/plan 25 3` — Plan önizlemesi al.
+3. `/sec 1` — Görev seç ve varsa eylem önerisini gör.
+4. `/eylem ...` — Gerektiğinde kendi somut eylemini yaz.
+5. Gerçek çalışmanın ardından `/kaydet` ile durumunu ve harcadığın süreyi bildir.
+6. `/ozet` ile günlük kayıtlarını incele.
+
+`/yardim` tüm komutları, `/devam` saklanan planı ve bekleyen eylemi gösterir.
+
+### AI olmadan devam etme
+
+`/sec 1 elle` komutu API çağırmadan görev seçer. Ardından `/eylem` ile çalışma adımı yazılabilir.
+
+AI önerisi alınamadığında görev seçimi korunur. Eylem belirlenmeden checkpoint kaydı yapılamaz. AI önerileri kullanıcı tarafından değerlendirilmeli; yanlış veya ilgisiz öneriler değiştirilebilir.
+
+### Günlük hatırlatıcı
+
+- `/hatirlat 09:00`: Bilgisayarın yerel saatine göre günlük başlangıç hatırlatıcısı.
+- `/hatirlat kapat`: Hatırlatıcıyı kapatır.
+
+Hatırlatma, çalışma kaydı oluşturmaz ve süre düşmez. Planlanan saatten bir saatten fazla sonra başlatılan bot o gün için yeni bir hatırlatma hazırlamaz. Önceden kuyruğa alınan mesajların teslimi bağlantıya bağlı olarak gecikebilir.
+
+### Kullanımın değerlendirilmesi
+
+Çıktı açıklamaları, çalışma süreleri ve tamamlanma bilgileri kullanıcı beyanına dayanır. Teknik test kayıtları günlük özetlerde bulunabilir.
+
+Projenin kişisel hipotezi; küçük ve uygulanabilir adımlar seçmenin, somut sonuçları kaydetmenin ve ilerlemeyi görmenin üretmeye geçişi kolaylaştırabileceğidir. Uygulamanın çalışması, bu etkinin gerçekleştiğini tek başına göstermez; fayda gerçek kullanım deneyimleri üzerinden değerlendirilecektir.

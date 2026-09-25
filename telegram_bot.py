@@ -8,6 +8,7 @@ from urllib.request import Request, urlopen
 from openai import APIError
 from llm import generate_next_action
 from uuid import uuid4
+from reminders import configure_reminder, queue_daily_reminder
 
 from main import (
     load_state,
@@ -177,14 +178,15 @@ def build_plan_message(command, session, state):
 def select_work_message(command, session, state):
     parts = command.split()
 
-    if len(parts) != 2:
-        return "Kullanım: /sec 1 veya /sec 2"
+    if len(parts) not in (2, 3) or (len(parts) == 3 and parts[2].lower() != "elle"):
+        return "Kullanım: /sec 1 veya AI kullanmadan seçmek için /sec 1 elle"
 
     try:
         index = int(parts[1]) - 1
     except ValueError:
         return "Görev numarası tam sayı olmalı."
 
+    manual = len(parts) == 3
     plan = session.get("plan")
 
     if not plan or plan["date"] != date.today().isoformat():
@@ -194,11 +196,7 @@ def select_work_message(command, session, state):
         return "Son planda bulunan bir görev numarası seç."
 
     task_id = plan["task_ids"][index]
-
-    task = next(
-        (task for task in state["tasks"] if task["id"] == task_id),
-        None,
-    )
+    task = next((task for task in state["tasks"] if task["id"] == task_id), None)
 
     if (
         task is None
@@ -210,57 +208,70 @@ def select_work_message(command, session, state):
         return "Bu görev artık uygun değil. Yeni bir /plan oluştur."
 
     minutes = plan["work_minutes_by_id"][task_id]
+    previous_work = session.get("work")
     action = task.get("next_action")
 
-    # Aynı görevi tekrar seçince üretilen öneriyi tekrar kullan.
-    previous_work = session.get("work")
     if previous_work and previous_work["task_id"] == task_id:
         action = previous_work["action"]
 
-    source = "Kayıtlı/bekleyen eylem"
+    if manual:
+        action = None
 
-    if not action:
-        if not task.get("desired_outcome") or not task.get("context"):
-            return (
-                "Bu görevin hedef sonucu veya bağlamı eksik. "
-                "Şimdilik CLI üzerinden tamamlayıp yeniden /plan oluştur."
-            )
-
-        completed_actions = [
-            checkpoint["action"]
-            for checkpoint in task.get("checkpoints", [])
-            if checkpoint["feedback"] == "done"
-        ]
-
-        try:
-            action = generate_next_action(
-                task["title"],
-                minutes,
-                plan["energy"],
-                completed_actions,
-                desired_outcome=task["desired_outcome"],
-                context=task["context"],
-            )
-        except (APIError, ValueError):
-            session.pop("work", None)
-            return "AI önerisi alınamadı. Biraz sonra tekrar deneyebilirsin."
-
-        source = "Yeni AI önerisi"
-
-    session["work"] = {
+    # Görev seçimi ile eylemin hazırlanması ayrı durumlardır.
+    work = {
         "task_id": task_id,
         "action": action,
         "planned_minutes": minutes,
         "energy": plan["energy"],
     }
+    session["work"] = work
+    source = "Kayıtlı/bekleyen eylem"
 
-    return (
+    if not action:
+        if manual:
+            source = "Elle eylem girişi seçildi; AI isteği gönderilmedi."
+        elif not task.get("desired_outcome") or not task.get("context"):
+            source = "Görevin hedef sonucu veya bağlamı eksik; AI önerisi istenmedi."
+        else:
+            completed_actions = [
+                checkpoint["action"]
+                for checkpoint in task.get("checkpoints", [])
+                if checkpoint["feedback"] == "done"
+            ]
+            try:
+                action = generate_next_action(
+                    task["title"], minutes, plan["energy"], completed_actions,
+                    desired_outcome=task["desired_outcome"],
+                    context=task["context"],
+                )
+                if not isinstance(action, str) or not action.strip():
+                    raise ValueError("Boş veya geçersiz eylem")
+                action = action.strip()
+            except (APIError, ValueError):
+                action = None
+                source = "AI önerisi alınamadı; görev seçimin korundu."
+            else:
+                source = "Yeni AI önerisi"
+
+    work["action"] = action
+    header = (
         f"Seçilen görev: {task['title'][:150]}\n"
         f"Ayrılan süre: {minutes} dakika\n\n"
-        f"{source}:\n{action[:2500]}\n\n"
-        "Eylemin hedefinle ve süreyle uyumunu kontrol et.\n"
-        "Henüz checkpoint oluşturulmadı ve süre düşülmedi."
     )
+
+    if action is None:
+        return (
+            header + source + "\n"
+            "Kendi eylemini yaz: /eylem Yapacağın küçük iş ve sonucu\n"
+            "Eylem belirlenene kadar /kaydet çalışmaz."
+        )
+
+    return (
+        header + f"{source}:\n{action[:2500]}\n\n"
+        "Eylemin hedefinle ve süreyle uyumunu kontrol et.\n"
+        "Gerekirse /eylem ile değiştir. Henüz checkpoint oluşturulmadı."
+    )
+
 
 def set_action_message(command, session):
     work = session.get("work")
@@ -304,6 +315,9 @@ def record_feedback_message(command, session, update_id, state):
 
     if plan["date"] != today:
         return "Plan önceki güne ait. Yeni bir /plan oluştur."
+
+    if not isinstance(work.get("action"), str) or not work["action"].strip():
+        return "Önce /eylem ile yapacağın işi yaz; henüz çalışma kaydı oluşturulmadı."
 
     header, separator, note = command.partition("|")
     parts = header.split()
@@ -597,6 +611,7 @@ def help_message():
         "/bugun — Günlük durum\n"
         "/plan 25 3 — Plan önizlemesi\n"
         "/sec 1 — Plandaki görevi seç\n"
+        "/sec 1 elle — AI isteği yapmadan seç, ardından /eylem yaz\n"
         "/devam — Saklanan planı ve bekleyen eylemi göster\n"
         "/eylem metin — Seçili görev için kendi eylemini yaz\n"
         "/kaydet continue 5 — 5 dakika çalıştım, devam edeceğim\n"
@@ -609,9 +624,11 @@ def help_message():
         "/ac kimlik — Yeniden aç, engeli kaldır\n"
         "/tamamla kimlik — Ana görevi tamamlandı olarak işaretle\n\n"
         "Süre kendi bildirimindir. /gun süre eklemez, kalan süreyi değiştirir.\n"
-        "Yeni plan, görev veya günlük ayar bekleyen seçimi temizler."
+        "Yeni plan, görev veya günlük ayar bekleyen seçimi temizler.\n"
         "/duzenle kimlik | hedef | bağlam — Görev bilgilerini güncelle; aynı alan için -\n"
         "/ozet — Bugünün çıktıları ve kaydedilmiş çalışma süresi\n"
+        "/hatirlat 09:00 — Günlük başlangıç hatırlatıcısı\n"
+        "/hatirlat kapat — Hatırlatıcıyı kapat\n"
     )
 
 
@@ -636,9 +653,12 @@ def resume_message(session, state):
             lines.append('Bekleyen görev artık uygun değil; yeni bir /plan oluştur.')
         else:
             lines.append(f"\nSeçili görev: {task['title'][:150]}")
-            lines.append(f"Eylem: {work['action'][:2200]}")
             lines.append(f"Planlanan süre: {work['planned_minutes']} dakika")
-            lines.append('Sonucu /kaydet ile bildirebilirsin.')
+            if work['action'] is None:
+                lines.append('Eylem henüz belirlenmedi. /eylem ile kendi eylemini yaz.')
+            else:
+                lines.append(f"Eylem: {work['action'][:2200]}")
+                lines.append('Sonucu /kaydet ile bildirebilirsin.')
     return '\n'.join(lines)
 
 
@@ -690,7 +710,8 @@ def get_runtime(state, owner_id):
                 raise ValueError("Geçersiz oturum alanı")
             if not (work['task_id'] in plan['task_ids']):
                 raise ValueError("Geçersiz oturum alanı")
-            if not (isinstance(work['action'], str) and work['action'].strip()):
+            action = work['action']
+            if action is not None and not (isinstance(action, str) and action.strip()):
                 raise ValueError("Geçersiz oturum alanı")
             if not (type(work['planned_minutes']) is int):
                 raise ValueError("Geçersiz oturum alanı")
@@ -846,6 +867,8 @@ def dispatch_message(text, session, state, update_id, message_date):
         return 'Bu komut önceki güne ait; işlenmedi. Güncel komutunu yeniden gönder.'
     if command == '/gun':
         return set_day_message(text, session, update_id, message_date, state)
+    if command == "/hatirlat":
+        return configure_reminder(text, state)
     if command == '/plan':
         return build_plan_message(text, session, state)
     if command == '/sec':
@@ -913,6 +936,14 @@ def main():
     while True:
         try:
             flush_pending_reply(token, owner_id)
+
+            state = load_state()
+            get_runtime(state, owner_id)
+
+            if queue_daily_reminder(state, owner_id):
+                save_state(state)
+                flush_pending_reply(token, owner_id)
+
             runtime = get_runtime(load_state(), owner_id)
             updates = telegram_request(token, 'getUpdates', {
                 'offset': runtime['offset'], 'timeout': 25,
