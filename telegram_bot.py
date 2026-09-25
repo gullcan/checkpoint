@@ -611,6 +611,7 @@ def help_message():
         "Süre kendi bildirimindir. /gun süre eklemez, kalan süreyi değiştirir.\n"
         "Yeni plan, görev veya günlük ayar bekleyen seçimi temizler."
         "/duzenle kimlik | hedef | bağlam — Görev bilgilerini güncelle; aynı alan için -\n"
+        "/ozet — Bugünün çıktıları ve kaydedilmiş çalışma süresi\n"
     )
 
 
@@ -757,12 +758,85 @@ def edit_task_message(command, session, state):
         "Yeni bir /plan oluşturabilirsin."
     )
 
+def build_summary_message(state):
+    today = date.today()
+    records = []
+
+    for task in state["tasks"]:
+        for checkpoint in task.get("checkpoints", []):
+            timestamp = datetime.fromisoformat(
+                checkpoint["recorded_at"]
+            ).astimezone()
+
+            if timestamp.date() == today:
+                records.append((timestamp, task, checkpoint))
+
+    records.sort(key=lambda item: item[0])
+
+    counts = {"done": 0, "continue": 0, "blocked": 0}
+    spent_minutes = 0
+    missing_duration = 0
+
+    for _, _, checkpoint in records:
+        counts[checkpoint["feedback"]] += 1
+
+        if "spent_minutes" in checkpoint:
+            spent_minutes += checkpoint["spent_minutes"]
+        else:
+            missing_duration += 1
+
+    lines = [
+        f"Bugünün özeti — {today.isoformat()}",
+        f"Tamamlandı bildirimi: {counts['done']}",
+        f"Devam bildirimi: {counts['continue']}",
+        f"Engel bildirimi: {counts['blocked']}",
+        f"Kaydedilmiş çalışma süresi: {spent_minutes} dakika",
+    ]
+
+    if missing_duration:
+        lines.append(
+            f"Süre bilgisi olmayan eski kayıt: {missing_duration}"
+        )
+
+    completed = [
+        (task, checkpoint)
+        for _, task, checkpoint in records
+        if checkpoint["feedback"] == "done"
+    ]
+
+    if not completed:
+        lines.append("\nBugün henüz tamamlandı bildirimi yok.")
+    else:
+        lines.append("\nSon tamamlanan adımlar:")
+
+        for task, checkpoint in completed[-5:]:
+            output = checkpoint.get("output_note")
+            if not output:
+                output = "Çıktı açıklaması kaydedilmemiş."
+
+            lines.append(
+                f"\n• {task['title'][:100]}\n"
+                f"Eylem: {checkpoint['action'][:180]}\n"
+                f"Çıktı: {output[:250]}"
+            )
+
+        if len(completed) > 5:
+            lines.append("\nSon 5 tamamlanma kaydı gösteriliyor.")
+
+    lines.append(
+        "\nBu özet kendi bildirimlerine dayanır; test kayıtları da dahildir."
+    )
+
+    return "\n".join(lines)
+
 def dispatch_message(text, session, state, update_id, message_date):
     command = text.split(maxsplit=1)[0] if text else ''
     if command in ['/start', '/yardim']:
         return help_message()
     if command == '/bugun':
         return build_today_message(state)
+    if command == "/ozet":
+        return build_summary_message(state)
     if command == '/gorevler':
         return list_tasks_message(state)
     if command == '/devam':

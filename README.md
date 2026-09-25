@@ -252,3 +252,66 @@ AI önerileri ilgisiz olabilir veya belirtilmemiş dosya adları üretebilir; ku
 Görev bağlamı otomatik güncellenmez. Günlük zaman takibi, kaydedilen çalışma sürelerini ve kullanıcının düzeltmelerini esas alır.
 
 Bu sürüm terminalde çalışır; Telegram bağlantısı ve otomatik hatırlatıcı içermez.
+
+
+
+## v0.3 — Kişisel Telegram botu
+
+Checkpoint, Telegram üzerinden günlük zaman ve enerji girişi, görev ekleme, plan önizlemesi, eylem seçimi ve checkpoint kaydı sunar. Yalnızca yapılandırılmış kullanıcının özel sohbet mesajlarını işler.
+
+### Başlatma
+
+CLI ile botu aynı anda çalıştırmayın. Aynı JSON dosyasını kullanırlar.
+
+Botun çalıştırıldığı terminalde şu ortam değişkenleri bulunmalıdır:
+
+- `TELEGRAM_BOT_TOKEN`: BotFather’dan alınan bot token’ı.
+- `TELEGRAM_ALLOWED_USER_ID`: İzin verilen hesabın sayısal Telegram kullanıcı kimliği.
+- `GROQ_API_KEY`: AI eylem önerileri için kullanılan API anahtarı.
+
+Botu `python telegram_bot.py` ile başlatın. Telegram’da `/yardim` yazarak komutları görün. Durdurmak için terminalde Ctrl+C kullanın.
+
+Anahtarları kaynak koda veya GitHub’a eklemeyin.
+
+### Temel kullanım
+
+Her komutu ayrı mesaj olarak gönderin.
+
+1. `/gun 40 3` — Kalan süreyi 40 dakika, enerjiyi 3 olarak ayarla.
+2. `/plan 25 3` — Bu koşullarla plan önizlemesi oluştur.
+3. `/sec 1` — İlk görevi seç ve eylemini gör.
+4. `/eylem ...` — Gerekirse kendi somut eylemini yaz.
+5. `/kaydet continue 5` — Beş dakikalık çalışmayı kaydet.
+6. `/kaydet done 10 | Ürettiğim çıktı` — Tamamlanan adımı ve çıktıyı kaydet.
+7. `/ozet` — Bugünkü bildirimleri, çıktıları ve kaydedilmiş süreyi gör.
+
+Her çalışma kaydından sonra yeni çalışma için yeniden plan oluşturulur.
+
+`/gun` mevcut süreye ekleme yapmaz; kalan süreyi belirtilen değere ayarlar. `/plan` önizlemesi günlük bütçeyi değiştirmez. `done`, çalışma adımının tamamlanmasıdır; ana görev ayrıca `/tamamla kimlik` ile kapatılır.
+
+### Görev yönetimi
+
+- `/bugun`: Kalan süre, enerji ve açık görevler.
+- `/gorevler`: Görev kimlikleri ve durumları.
+- `/ekle görev | önem | dakika | yük | deadline | hedef | bağlam`: Görev ekle.
+- `/duzenle kimlik | hedef | bağlam`: Hedefi ve bağlamı güncelle; değişmeyecek alan için `-` kullan.
+- `/arsiv kimlik`: Görevi silmeden seçimden çıkar.
+- `/ac kimlik`: Görevi yeniden aç ve engel durumunu kaldır.
+- `/tamamla kimlik`: Ana görevi tamamlandı olarak işaretle.
+- `/devam`: Saklanan planı ve bekleyen eylemi göster.
+
+### Kayıt ve yeniden başlatma
+
+Bekleyen plan, eylem ve işlenen Telegram mesajının konumu `state.json` içinde saklanır. Aynı gün bot yeniden başlatıldığında `/devam` ile çalışma görüntülenebilir.
+
+Görev değişiklikleri ve mesajın işlenme konumu birlikte kaydedilir. Aynı Telegram mesajının yeniden teslim edilmesi, aynı işlemin tekrar uygulanmasına yol açmaz. Yanıt gönderimindeki bağlantı belirsizliklerinde yanıt mesajı tekrar görünebilir.
+
+### Bilinen sınırlar
+
+- Bilgisayar ve bot programı çalışırken kullanılabilir; sürekli barındırma ve otomatik hatırlatıcı henüz yoktur.
+- Aynı anda tek bot süreci çalıştırılmalıdır.
+- AI önerileri yanlış veya ilgisiz olabilir; kullanıcı değerlendirmesi gerekir.
+- Telegram’daki yeni AI önerisi başarısız olursa görev seçimi tamamlanamayabilir; bu akış geliştirilecektir.
+- Süre ve tamamlanma bilgileri kullanıcı beyanıdır.
+- Günlük özette teknik test kayıtları da yer alabilir.
+- Uzun listeler ve açıklamalar mesajda kısaltılabilir; kayıt dosyasındaki veriler korunur.
