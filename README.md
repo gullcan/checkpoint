@@ -213,3 +213,42 @@ Ek kontrollerde boş başlık, geçersiz önem/süre/enerji/tarih ve JSON'da yan
 - [Python — JSON](https://docs.python.org/3/library/json.html)
 
 Yeni özellik fikirleri v0.1 davranışıyla karıştırılmadan ayrı bir `BACKLOG.md` dosyasında tutulabilir.
+
+
+
+
+## v0.2 — Günlük kullanım için CLI
+
+Checkpoint, görevlerin toplam tahmini süresi ile mevcut oturumda ayrılacak çalışma süresini ayrı değerlendirir. Öncelik sırasına göre en fazla iki aktif görev seçer; ilkini Daily Win olarak önerir. Kullanıcı bu iki görevden hangisinde çalışacağını seçebilir.
+
+### Eklenen özellikler
+
+- Görev başına varsayılan olarak en fazla 15 dakikalık çalışma süresi ayırma.
+- Hedef sonuç ve mevcut görev bağlamını kaydetme ve düzenleme.
+- Kullanıcı istediğinde AI önerisi alma; öneriyi kabul etme, elle değiştirme veya oturumu geçme.
+- Tamamlanan adım için somut çıktı açıklaması kaydetme.
+- Gerçekte harcanan süreyi kullanıcıdan alıp günlük kalan zamanı güncelleme.
+- Aynı gün yeniden açıldığında kalan zamanı koruma.
+- Görevleri arşivleme ve arşivden geri alma.
+- Bir adımın tamamlanması ile ana görevin tamamlanmasını ayrı kaydetme.
+- Tamamlanmış ve arşivlenmiş görevleri sonraki seçimlerden çıkarma.
+- Günlük tamamlandı, devam ve engel bildirimlerini; çıktı açıklamalarını ve kaydedilmiş süreyi gösterme.
+
+### Doğrulanan davranışlar
+
+- İkinci aktif görev seçildiğinde checkpoint doğru göreve yazılır.
+- Oturum geçildiğinde yeni checkpoint oluşmaz ve süre düşmez.
+- Kalan süre uygulama yeniden açıldığında korunur.
+- Arşivlenen görev geri alınabilir.
+- Tamamlanan ana görev, kullanılabilir süre olsa bile yeniden seçilmez.
+- Eski checkpoint’lerde eksik süre bilgisi günlük özette ayrıca belirtilir.
+
+### Bilinen sınırlar
+
+AI önerileri ilgisiz olabilir veya belirtilmemiş dosya adları üretebilir; kullanıcı tarafından değerlendirilmelidir. Elle eylem girme seçeneği bulunur.
+
+Çalışma süresi ve tamamlanma bilgisi kullanıcının beyanına dayanır. Checkpoint sayısı, doğrulanmış çıktı sayısı anlamına gelmez.
+
+Görev bağlamı otomatik güncellenmez. Günlük zaman takibi, kaydedilen çalışma sürelerini ve kullanıcının düzeltmelerini esas alır.
+
+Bu sürüm terminalde çalışır; Telegram bağlantısı ve otomatik hatırlatıcı içermez.
